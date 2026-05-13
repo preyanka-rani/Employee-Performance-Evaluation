@@ -1,0 +1,49 @@
+# Files that should never be in the Docker build context
+.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Git
+.git/
+.gitignore
+
+# Development tools
+.venv/
+venv/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Tests
+tests/
+
+# Docs & local data
+data/
+*.db
+*.sqlite3
+docs/
+*.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+docker/
+
+# Misc
+*.log
+tmp/

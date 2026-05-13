@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Employee Performance Evaluation — Python dependencies
+# Generated from pyproject.toml.  Install with:
+#   python -m venv .venv && .venv\Scripts\activate
+#   pip install -r requirements.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+
+# ── Internal database (SQLite → PostgreSQL) ───────────────────────────────────
+sqlalchemy[asyncio]>=2.0.36
+aiosqlite>=0.20.0
+alembic>=1.14.0
+
+# ── Source databases ──────────────────────────────────────────────────────────
+aiomysql>=0.2.0          # async MySQL (CRM work-logs + attendance)
+asyncpg>=0.29.0          # async PostgreSQL (GitLab DB direct queries)
+
+# ── AI / LangChain ───────────────────────────────────────────────────────────
+langchain>=0.3.0
+langchain-anthropic>=0.3.0
+langchain-groq>=0.2.0
+langgraph>=0.2.0
+anthropic>=0.40.0
+groq>=0.12.0
+
+# ── GitLab REST API (fallback when no direct DB) ──────────────────────────────
+python-gitlab>=4.13.0
+httpx>=0.27.0
+
+# ── Celery + Redis ─────────────────────────────────────────────────────────────
+celery[redis]>=5.4.0
+redis>=5.2.0
+kombu>=5.4.0
+
+# ── Excel / Data parsing ──────────────────────────────────────────────────────
+openpyxl>=3.1.5
+pandas>=2.2.0
+textblob>=0.18.0
+
+# ── Pydantic / Config ─────────────────────────────────────────────────────────
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.0
+python-dotenv>=1.0.1
+
+# ── Security ──────────────────────────────────────────────────────────────────
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+structlog>=24.4.0
+tenacity>=9.0.0
+arrow>=1.3.0
+
+# ── Dev / Test ────────────────────────────────────────────────────────────────
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+pytest-cov>=6.0.0
+factory-boy>=3.3.1
+faker>=33.0.0
+ruff>=0.8.0
