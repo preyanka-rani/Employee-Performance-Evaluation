@@ -241,3 +241,109 @@ class PostgreSQLGitLabClient:
             "total_merged_mrs": mr_count,
             "active_users": user_count,
         }
+
+    async def get_issue_stats(
+        self,
+        user_email: str,
+        year: int,
+        month: int,
+    ) -> dict[str, int]:
+        """
+        Return issue assignment, resolution and reopen counts for a developer
+        across the full calendar month.
+
+        Mirrors the logic in monthly_report.py get_daily_metrics() but
+        aggregated for the entire month in two queries instead of day-by-day.
+
+        Returns:
+            total_assigned  – distinct issues where user logged time
+            total_resolved  – of those, issues with state_id = 2 (closed)
+            total_reopens   – issues that went closed (2) → reopened (3 or 5)
+                              with at least 60-second gap between transitions
+        """
+        start = datetime(year, month, 1)
+        end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+
+        pool = await self._get_pool()
+
+        assign_query = """
+            WITH user_issues AS (
+                SELECT DISTINCT
+                    i.id        AS issue_id,
+                    i.state_id
+                FROM issues    i
+                JOIN timelogs  t ON t.issue_id = i.id
+                JOIN users     u ON t.user_id  = u.id
+                WHERE u.email    = $1
+                  AND t.spent_at >= $2
+                  AND t.spent_at <  $3
+            )
+            SELECT
+                COUNT(DISTINCT issue_id)                                    AS total_assigned,
+                COUNT(DISTINCT CASE WHEN state_id = 2 THEN issue_id END)   AS total_resolved
+            FROM user_issues
+        """
+
+        reopen_query = """
+            WITH user_issues AS (
+                SELECT DISTINCT i.id AS issue_id
+                FROM issues    i
+                JOIN timelogs  t ON t.issue_id = i.id
+                JOIN users     u ON t.user_id  = u.id
+                WHERE u.email    = $1
+                  AND t.spent_at >= $2
+                  AND t.spent_at <  $3
+            ),
+            state_transitions AS (
+                SELECT
+                    rse.issue_id,
+                    rse.state,
+                    rse.created_at,
+                    LAG(rse.state) OVER (
+                        PARTITION BY rse.issue_id ORDER BY rse.created_at
+                    ) AS prev_state,
+                    LAG(rse.created_at) OVER (
+                        PARTITION BY rse.issue_id ORDER BY rse.created_at
+                    ) AS prev_created_at
+                FROM resource_state_events rse
+                JOIN user_issues ui ON rse.issue_id = ui.issue_id
+            )
+            SELECT COUNT(DISTINCT issue_id) AS total_reopens
+            FROM state_transitions
+            WHERE prev_state = 2
+              AND state IN (3, 5)
+              AND EXTRACT(EPOCH FROM (created_at - prev_created_at)) >= 60
+        """
+
+        try:
+            async with pool.acquire() as conn:
+                assign_row = await conn.fetchrow(assign_query, user_email, start, end)
+                reopen_row = await conn.fetchrow(reopen_query, user_email, start, end)
+        except Exception as exc:
+            logger.warning(
+                "pg_issue_stats_failed",
+                email=user_email,
+                year=year,
+                month=month,
+                error=str(exc),
+            )
+            return {"total_assigned": 0, "total_resolved": 0, "total_reopens": 0}
+
+        total_assigned = int(assign_row["total_assigned"] or 0) if assign_row else 0
+        total_resolved = int(assign_row["total_resolved"] or 0) if assign_row else 0
+        total_reopens = int(reopen_row["total_reopens"] or 0) if reopen_row else 0
+
+        logger.info(
+            "pg_issue_stats",
+            email=user_email,
+            year=year,
+            month=month,
+            total_assigned=total_assigned,
+            total_resolved=total_resolved,
+            total_reopens=total_reopens,
+        )
+        return {
+            "total_assigned": total_assigned,
+            "total_resolved": total_resolved,
+            "total_reopens": total_reopens,
+        }
