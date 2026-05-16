@@ -234,6 +234,93 @@ class CommitBasedGitLabClient:
             logger.warning("commit_diff_failed", sha=sha, error=str(exc))
             return []
 
+    def _list_commits_with_stats_sync(
+        self,
+        project_id: int,
+        author_email: str,
+        since: str,
+        until: str,
+    ) -> list[Any]:
+        """
+        List commits with per-commit additions/deletions stats.
+        Uses with_stats=True so each commit object includes a stats dict.
+        Runs in a thread executor (python-gitlab is synchronous).
+        """
+        try:
+            project = self._get_gl().projects.get(project_id)
+            commits = project.commits.list(
+                author_email=author_email,
+                since=since,
+                until=until,
+                all=True,
+                with_stats=True,
+            )
+            return list(commits)
+        except Exception as exc:
+            logger.warning(
+                "commit_stats_list_failed", project_id=project_id, error=str(exc)
+            )
+            return []
+
+    async def get_developer_line_stats(
+        self,
+        username: str,
+        author_email: str,
+        year: int,
+        month: int,
+    ) -> dict[str, int]:
+        """
+        Return total lines added and deleted by *author_email* in the given
+        month, summed across all projects (merge commits excluded).
+
+        Uses with_stats=True on the commits list endpoint — one REST call per
+        project instead of one per commit.
+        """
+        projects = await self.get_developer_projects(username, year, month)
+        if not projects:
+            return {"total_additions": 0, "total_deletions": 0}
+
+        start_date = date(year, month, 1)
+        end_date = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        since_str = start_date.isoformat() + "T00:00:00Z"
+        until_str = end_date.isoformat() + "T00:00:00Z"
+
+        loop = asyncio.get_event_loop()
+        total_additions = 0
+        total_deletions = 0
+
+        for proj in projects:
+            commits = await loop.run_in_executor(
+                None,
+                self._list_commits_with_stats_sync,
+                proj["project_id"],
+                author_email,
+                since_str,
+                until_str,
+            )
+            for commit in commits:
+                if _is_merge_commit(getattr(commit, "title", "") or ""):
+                    continue
+                stats = getattr(commit, "stats", None)
+                if stats is None:
+                    continue
+                if isinstance(stats, dict):
+                    total_additions += int(stats.get("additions", 0) or 0)
+                    total_deletions += int(stats.get("deletions", 0) or 0)
+                else:
+                    total_additions += int(getattr(stats, "additions", 0) or 0)
+                    total_deletions += int(getattr(stats, "deletions", 0) or 0)
+
+        logger.info(
+            "commit_line_stats",
+            username=username,
+            year=year,
+            month=month,
+            total_additions=total_additions,
+            total_deletions=total_deletions,
+        )
+        return {"total_additions": total_additions, "total_deletions": total_deletions}
+
     # ── Main public method ───────────────────────────────────────────────────
 
     async def get_developer_commit_bundles(
