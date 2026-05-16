@@ -186,7 +186,12 @@ async def generate_excel_report(
         "Employee ID",
         "Name",
         "Email",
-        "Quality Check (0-100)",
+        "Component 1 Score (0-100)",
+        "  Code Quality (30%)",
+        "  Resolution Rate % (35%)",
+        "  Reopen Quality (15%)",
+        "  Lines Added Score (10%)",
+        "  Lines Deleted Score (10%)",
         "Work Log Score (0-100)",
         "Attendance Score (0-100)",
         "Problem Solving (0-10)",
@@ -217,7 +222,12 @@ async def generate_excel_report(
             emp.employee_id if emp else "",
             emp.name if emp else "",
             score.employee_email,
+            round(score.component1_score, 2),
             round(score.quality_check_score, 2),
+            round(score.resolution_rate, 2),
+            round(score.reopen_quality_score, 2),
+            round(score.lines_added_score, 2),
+            round(score.lines_deleted_score, 2),
             round(score.component2_score, 2),
             round(score.attendance_score, 2),
             round(score.problem_solving, 2),
@@ -242,7 +252,27 @@ async def generate_excel_report(
             final_cell.fill = red_fill
 
     # ── Column widths ─────────────────────────────────────────────────────────
-    column_widths = [14, 22, 30, 22, 22, 22, 22, 14, 22, 22, 22, 20, 18, 15]
+    column_widths = [
+        14,
+        22,
+        30,
+        24,
+        22,
+        24,
+        22,
+        22,
+        22,
+        22,
+        22,
+        22,
+        14,
+        22,
+        22,
+        22,
+        20,
+        18,
+        15,
+    ]
     for col_idx, width in enumerate(column_widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 

@@ -73,11 +73,75 @@ from app.repositories.score_repository import (
     WorkLogRepository,
 )
 from app.services.ai.sentiment import compute_employee_sentiment_score
+from app.services.data_sources.commit_gitlab_client import CommitBasedGitLabClient
 from app.services.data_sources.mysql_client import MySQLCRMClient, MySQLHRClient
+from app.services.data_sources.postgresql_gitlab_client import PostgreSQLGitLabClient
 from app.services.scoring.base import AbstractScorer
 from app.services.workflows.commit_analysis import run_commit_analysis
 
 logger = get_logger(__name__)
+
+
+# ── Component 1 sub-score helpers ────────────────────────────────────────────
+
+
+def normalise_lines_added(additions: int) -> float:
+    """Tiered score for code lines added (0–100)."""
+    if additions >= 3000:
+        return 100.0
+    elif additions >= 1500:
+        return 85.0
+    elif additions >= 750:
+        return 70.0
+    elif additions >= 300:
+        return 55.0
+    elif additions >= 150:
+        return 40.0
+    elif additions >= 1:
+        return 25.0
+    return 0.0
+
+
+def normalise_lines_deleted(deletions: int) -> float:
+    """Tiered score for code lines deleted/refactored (0–100)."""
+    if deletions >= 1500:
+        return 100.0
+    elif deletions >= 750:
+        return 85.0
+    elif deletions >= 300:
+        return 70.0
+    elif deletions >= 150:
+        return 55.0
+    elif deletions >= 50:
+        return 40.0
+    elif deletions >= 1:
+        return 25.0
+    return 0.0
+
+
+def compute_component1(
+    code_quality: float,
+    resolution_rate: float,
+    reopen_quality: float,
+    lines_added_score: float,
+    lines_deleted_score: float,
+) -> float:
+    """
+    Weighted Component 1 (0–100):
+        Code Quality       30%
+        Resolution Rate    35%
+        Reopen Quality     15%
+        Lines Added        10%
+        Lines Deleted      10%
+    """
+    return round(
+        code_quality * 0.30
+        + resolution_rate * 0.35
+        + reopen_quality * 0.15
+        + lines_added_score * 0.10
+        + lines_deleted_score * 0.10,
+        4,
+    )
 
 
 # ── Work-log normalisation ────────────────────────────────────────────────────
@@ -200,7 +264,70 @@ class DeveloperScorer(AbstractScorer):
                 year=year,
                 month=month,
             )
-            quality_check: float = commit_state["aggregate_score"]
+            code_quality_ai: float = commit_state["aggregate_score"]
+
+            # ── 1.5  Fetch issue stats + line stats for Component 1 ───────────
+            gitlab_username = employee.gitlab_username or employee.employee_id
+
+            pg_client = PostgreSQLGitLabClient()
+            commit_client = CommitBasedGitLabClient()
+            try:
+                issue_stats = await pg_client.get_issue_stats(
+                    user_email=employee.email,
+                    year=year,
+                    month=month,
+                )
+                line_stats = await commit_client.get_developer_line_stats(
+                    username=gitlab_username,
+                    author_email=employee.email,
+                    year=year,
+                    month=month,
+                )
+            finally:
+                await pg_client.close()
+                await commit_client.close()
+
+            total_assigned: int = issue_stats["total_assigned"]
+            total_resolved: int = issue_stats["total_resolved"]
+            total_reopens: int = issue_stats["total_reopens"]
+
+            # Resolution rate (0-100)
+            resolution_rate: float = (
+                (total_resolved / total_assigned * 100) if total_assigned > 0 else 0.0
+            )
+
+            # Reopen quality (0-100): fewer reopens → higher score
+            reopen_rate: float = (
+                (total_reopens / total_assigned * 100) if total_assigned > 0 else 0.0
+            )
+            reopen_quality: float = max(0.0, min(100.0, 100.0 - reopen_rate))
+
+            # Line tier scores (0-100)
+            lines_added_score: float = normalise_lines_added(
+                line_stats["total_additions"]
+            )
+            lines_deleted_score: float = normalise_lines_deleted(
+                line_stats["total_deletions"]
+            )
+
+            # Weighted Component 1
+            quality_check: float = compute_component1(
+                code_quality=code_quality_ai,
+                resolution_rate=resolution_rate,
+                reopen_quality=reopen_quality,
+                lines_added_score=lines_added_score,
+                lines_deleted_score=lines_deleted_score,
+            )
+
+            log.info(
+                "component1_computed",
+                code_quality=code_quality_ai,
+                resolution_rate=round(resolution_rate, 2),
+                reopen_quality=round(reopen_quality, 2),
+                lines_added_score=lines_added_score,
+                lines_deleted_score=lines_deleted_score,
+                component1=quality_check,
+            )
 
             # Persist each commit bundle score row
             cq_repo = CodeQualityRepository(db)
@@ -369,7 +496,12 @@ class DeveloperScorer(AbstractScorer):
                 FinalScore(
                     evaluation_run_id=evaluation_run_id,
                     employee_email=employee.email,
-                    quality_check_score=quality_check,
+                    quality_check_score=code_quality_ai,
+                    resolution_rate=round(resolution_rate, 4),
+                    reopen_quality_score=round(reopen_quality, 4),
+                    lines_added_score=lines_added_score,
+                    lines_deleted_score=lines_deleted_score,
+                    component1_score=quality_check,
                     component2_score=work_log_score,
                     segment_a_score=round((quality_check + work_log_score) / 2, 4),
                     segment_a_marks=segment_a_marks,
@@ -395,7 +527,14 @@ class DeveloperScorer(AbstractScorer):
                     "segment_b_marks": segment_b_marks,
                     "base_total": base_total,
                     "reward_score": reward,
-                    "quality_check": quality_check,
+                    # Component 1 breakdown
+                    "component1_score": quality_check,
+                    "code_quality_ai": code_quality_ai,
+                    "resolution_rate": round(resolution_rate, 4),
+                    "reopen_quality_score": round(reopen_quality, 4),
+                    "lines_added_score": lines_added_score,
+                    "lines_deleted_score": lines_deleted_score,
+                    # Other scores
                     "work_log_score": work_log_score,
                     "sentiment_score": sentiment_avg,
                     "attendance_score": attendance_score,
