@@ -226,7 +226,25 @@ class FinalScore(Base):
     # Segment A breakdown
     quality_check_score: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.0
-    )  # 0-100
+    )  # raw AI code quality, 0-100 (30% sub-component of Component 1)
+
+    # Component 1 sub-scores (used to build the weighted composite)
+    resolution_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # (resolved/assigned)*100, 0-100
+    reopen_quality_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 100 - reopen_rate, 0-100
+    lines_added_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # tiered 0/25/40/55/70/85/100
+    lines_deleted_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # tiered 0/25/40/55/70/85/100
+    component1_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # weighted composite of the 5 sub-scores above, 0-100
+
     component2_score: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.0
     )  # 0-100
