@@ -76,36 +76,59 @@ class MySQLCRMClient:
         month: int,
     ) -> list[WorkLogRecord]:
         """
-        Fetch aggregated log hours for developers from project_activity_log.
-        Reference: perform_crm.sql (§1.1 Work Logs)
+        Fetch aggregated log hours for developers.
+
+        Unions BOTH source tables (mirrors perform_crm.sql):
+          1. project_activity_log     — CRM activity logs (joined via created_by)
+          2. project_activity_log_clab — Codelab logs (joined via user_email)
         """
         if not employee_ids:
             return []
 
-        # Build parameterised IN clause
         placeholders = ", ".join(f":emp_{i}" for i in range(len(employee_ids)))
         params: dict = {f"emp_{i}": eid for i, eid in enumerate(employee_ids)}
         params["year"] = year
         params["month"] = month
-        # Pass ':00' as a named param so SQLAlchemy doesn't interpret the
-        # colon in the string literal as a bind parameter placeholder.
         params["time_suffix"] = ":00"
 
         sql = text(f"""
             SELECT
-                u.employee_id,
-                u.user_email,
-                YEAR(alog.work_dt)  AS year,
-                MONTH(alog.work_dt) AS month_id,
-                ROUND(SUM(IFNULL(TIME_TO_SEC(CONCAT(alog.work_duation, :time_suffix)) / 3600, 0)), 2)
-                    AS total_hours
-            FROM project_activity_log alog
-            JOIN users u ON alog.created_by = u.id
-            WHERE u.user_status = 'active'
-              AND u.employee_id IN ({placeholders})
-              AND YEAR(alog.work_dt)  = :year
-              AND MONTH(alog.work_dt) = :month
-            GROUP BY u.employee_id, u.user_email, year, month_id
+                employee_id,
+                user_email,
+                year,
+                month_id,
+                ROUND(SUM(log_hour), 2) AS total_hours
+            FROM (
+                SELECT
+                    u.employee_id,
+                    u.user_email,
+                    YEAR(alog.work_dt)  AS year,
+                    MONTH(alog.work_dt) AS month_id,
+                    ROUND(IFNULL(TIME_TO_SEC(CONCAT(alog.work_duation, :time_suffix)) / 3600, 0), 2)
+                        AS log_hour
+                FROM project_activity_log alog
+                JOIN users u ON alog.created_by = u.id
+                WHERE u.user_status = 'active'
+                  AND u.employee_id IN ({placeholders})
+                  AND YEAR(alog.work_dt)  = :year
+                  AND MONTH(alog.work_dt) = :month
+
+                UNION ALL
+
+                SELECT
+                    u.employee_id,
+                    u.user_email,
+                    YEAR(clab.work_dt)  AS year,
+                    MONTH(clab.work_dt) AS month_id,
+                    IFNULL(clab.hour_spent, 0) AS log_hour
+                FROM project_activity_log_clab clab
+                JOIN users u ON clab.user_email = u.user_email
+                WHERE u.user_status = 'active'
+                  AND u.employee_id IN ({placeholders})
+                  AND YEAR(clab.work_dt)  = :year
+                  AND MONTH(clab.work_dt) = :month
+            ) combined
+            GROUP BY employee_id, user_email, year, month_id
         """)
 
         async with self._session_factory() as session:
@@ -131,7 +154,10 @@ class MySQLCRMClient:
     ) -> list[WorkLogRecord]:
         """
         Fetch individual log descriptions for sentiment analysis.
-        Reference: perform_crm_df.py (§1.1 Log Description)
+
+        Unions BOTH source tables (mirrors perform_crm.sql):
+          1. project_activity_log.description
+          2. project_activity_log_clab.issue_details
         """
         if not employee_ids:
             return []
@@ -144,19 +170,44 @@ class MySQLCRMClient:
 
         sql = text(f"""
             SELECT
-                u.employee_id,
-                u.user_email,
-                YEAR(alog.work_dt)  AS year,
-                MONTH(alog.work_dt) AS month_id,
-                alog.description,
-                ROUND(IFNULL(TIME_TO_SEC(CONCAT(alog.work_duation, :time_suffix)) / 3600, 0), 2)
-                    AS log_hour
-            FROM project_activity_log alog
-            JOIN users u ON alog.created_by = u.id
-            WHERE u.user_status = 'active'
-              AND u.employee_id IN ({placeholders})
-              AND YEAR(alog.work_dt)  = :year
-              AND MONTH(alog.work_dt) = :month
+                employee_id,
+                user_email,
+                year,
+                month_id,
+                description,
+                log_hour
+            FROM (
+                SELECT
+                    u.employee_id,
+                    u.user_email,
+                    YEAR(alog.work_dt)  AS year,
+                    MONTH(alog.work_dt) AS month_id,
+                    alog.description    AS description,
+                    ROUND(IFNULL(TIME_TO_SEC(CONCAT(alog.work_duation, :time_suffix)) / 3600, 0), 2)
+                        AS log_hour
+                FROM project_activity_log alog
+                JOIN users u ON alog.created_by = u.id
+                WHERE u.user_status = 'active'
+                  AND u.employee_id IN ({placeholders})
+                  AND YEAR(alog.work_dt)  = :year
+                  AND MONTH(alog.work_dt) = :month
+
+                UNION ALL
+
+                SELECT
+                    u.employee_id,
+                    u.user_email,
+                    YEAR(clab.work_dt)  AS year,
+                    MONTH(clab.work_dt) AS month_id,
+                    clab.issue_details  AS description,
+                    IFNULL(clab.hour_spent, 0) AS log_hour
+                FROM project_activity_log_clab clab
+                JOIN users u ON clab.user_email = u.user_email
+                WHERE u.user_status = 'active'
+                  AND u.employee_id IN ({placeholders})
+                  AND YEAR(clab.work_dt)  = :year
+                  AND MONTH(clab.work_dt) = :month
+            ) combined
         """)
 
         async with self._session_factory() as session:
