@@ -59,6 +59,7 @@ from app.models.employee import Employee
 from app.models.scores import (
     AttendanceScore,
     CodeQualityScore,
+    DeveloperFinalScore,
     FinalScore,
     SentimentScore,
     TLAssessmentScore,
@@ -329,39 +330,74 @@ class DeveloperScorer(AbstractScorer):
                 component1=quality_check,
             )
 
-            # Persist each commit bundle score row
+            # Persist each commit bundle score row (or one default row if no commits)
+            gitlab_username_used = employee.gitlab_username or employee.employee_id
             cq_repo = CodeQualityRepository(db)
-            for row in commit_state["mr_scores"]:
+            if commit_state["mr_scores"]:
+                for row in commit_state["mr_scores"]:
+                    await cq_repo.create(
+                        CodeQualityScore(
+                            evaluation_run_id=row["evaluation_run_id"],
+                            employee_email=row["employee_email"],
+                            mr_reference=row["mr_reference"],
+                            mr_title=row["mr_title"],
+                            raw_score=row["raw_score"],
+                            readability_score=row["readability_score"],
+                            logic_efficiency_score=row["logic_efficiency_score"],
+                            error_handling_score=row["error_handling_score"],
+                            architecture_score=row["architecture_score"],
+                            security_score=row["security_score"],
+                            reasoning=row["reasoning"],
+                            issues=row["issues"],
+                            model_used=row["model_used"],
+                            lines_added=row.get("lines_added", 0),
+                            lines_deleted=row.get("lines_deleted", 0),
+                        )
+                    )
+            else:
+                # No commits found — write one sentinel row so the report shows
+                # which GitLab username was used and why score is the default 70.0
                 await cq_repo.create(
                     CodeQualityScore(
-                        evaluation_run_id=row["evaluation_run_id"],
-                        employee_email=row["employee_email"],
-                        mr_reference=row["mr_reference"],
-                        mr_title=row["mr_title"],
-                        raw_score=row["raw_score"],
-                        readability_score=row["readability_score"],
-                        logic_efficiency_score=row["logic_efficiency_score"],
-                        error_handling_score=row["error_handling_score"],
-                        architecture_score=row["architecture_score"],
-                        security_score=row["security_score"],
-                        reasoning=row["reasoning"],
-                        issues=row["issues"],
-                        model_used=row["model_used"],
+                        evaluation_run_id=evaluation_run_id,
+                        employee_email=employee.email,
+                        mr_reference="no_commits_found",
+                        mr_title=f"No commits found for GitLab user '{gitlab_username_used}' in {year}-{month:02d}",
+                        raw_score=0.0,
+                        readability_score=0.0,
+                        logic_efficiency_score=0.0,
+                        error_handling_score=0.0,
+                        architecture_score=0.0,
+                        security_score=0.0,
+                        reasoning=(
+                            f"No GitLab commits were found for employee '{employee.name}' "
+                            f"(email: {employee.email}, GitLab username used: '{gitlab_username_used}') "
+                            f"during {year}-{month:02d}. "
+                            "No code quality score has been assigned. "
+                            "Possible reasons: (1) No code was pushed in this period, "
+                            "(2) GitLab username in the system does not match the actual GitLab account, "
+                            "(3) Commits were made under a different email/username."
+                        ),
+                        issues="[]",
+                        model_used="no_commits",
                     )
                 )
 
             # ── 2. Work logs from CRM MySQL ───────────────────────────────────
             crm = MySQLCRMClient()
-            log_records = await crm.get_developer_work_logs(
-                employee_ids=[employee.employee_id],
-                year=year,
-                month=month,
-            )
-            descriptions = await crm.get_developer_log_descriptions(
-                employee_ids=[employee.employee_id],
-                year=year,
-                month=month,
-            )
+            try:
+                log_records = await crm.get_developer_work_logs(
+                    employee_ids=[employee.employee_id],
+                    year=year,
+                    month=month,
+                )
+                descriptions = await crm.get_developer_log_descriptions(
+                    employee_ids=[employee.employee_id],
+                    year=year,
+                    month=month,
+                )
+            finally:
+                await crm.close()
 
             # Sum hours for this employee
             total_hours = sum(
@@ -407,11 +443,14 @@ class DeveloperScorer(AbstractScorer):
 
             # ── 4. Attendance from HR MySQL ───────────────────────────────────
             hr = MySQLHRClient()
-            attendance_records = await hr.get_attendance(
-                employee_ids=[employee.employee_id],
-                year=year,
-                month=month,
-            )
+            try:
+                attendance_records = await hr.get_attendance(
+                    employee_ids=[employee.employee_id],
+                    year=year,
+                    month=month,
+                )
+            finally:
+                await hr.close()
             attendance_row = next(
                 (
                     r
@@ -490,7 +529,11 @@ class DeveloperScorer(AbstractScorer):
             )
             final = compute_final_score(base_total, reward)
 
-            # ── 7. Persist final score ────────────────────────────────────────
+            # ── 7. Persist scores ─────────────────────────────────────────────
+            # Component 2 composite
+            component2 = round(work_log_score * 0.9 + sentiment_avg * 0.1, 4)
+            seg_a_raw = round((quality_check + component2) / 2, 4)
+
             fs_repo = FinalScoreRepository(db)
             await fs_repo.create(
                 FinalScore(
@@ -502,8 +545,8 @@ class DeveloperScorer(AbstractScorer):
                     lines_added_score=lines_added_score,
                     lines_deleted_score=lines_deleted_score,
                     component1_score=quality_check,
-                    component2_score=work_log_score,
-                    segment_a_score=round((quality_check + work_log_score) / 2, 4),
+                    component2_score=component2,
+                    segment_a_score=seg_a_raw,
                     segment_a_marks=segment_a_marks,
                     attendance_score=attendance_score,
                     attendance_marks=round(attendance_score / 10, 4),
@@ -520,6 +563,46 @@ class DeveloperScorer(AbstractScorer):
                 )
             )
 
+            # Write to team-specific developer_final_scores table
+            await db.flush()  # ensure FinalScore gets an id before we write the twin
+            dev_score = DeveloperFinalScore(
+                evaluation_run_id=evaluation_run_id,
+                year=year,
+                month=month,
+                employee_id=employee.employee_id,
+                employee_name=employee.name,
+                employee_email=employee.email,
+                # Component 1
+                code_quality_score=code_quality_ai,
+                resolution_rate=round(resolution_rate, 4),
+                reopen_quality_score=round(reopen_quality, 4),
+                lines_added_score=lines_added_score,
+                lines_deleted_score=lines_deleted_score,
+                component1_score=quality_check,
+                # Component 2
+                work_log_hours=total_hours,
+                work_log_score=work_log_score,
+                sentiment_score=sentiment_avg,
+                component2_score=component2,
+                # Segment A
+                segment_a_score=seg_a_raw,
+                segment_a_marks=segment_a_marks,
+                # Segment B
+                attendance_score=attendance_score,
+                attendance_marks=round(attendance_score / 10, 4),
+                tl_problem_solving=problem_solving,
+                tl_kpi=kpi,
+                tl_general=general,
+                tl_total=tl_total,
+                segment_b_marks=segment_b_marks,
+                # Final
+                base_total=base_total,
+                reward_score=reward,
+                final_score=final,
+            )
+            db.add(dev_score)
+            await db.flush()
+
             result.update(
                 {
                     "final_score": final,
@@ -534,9 +617,12 @@ class DeveloperScorer(AbstractScorer):
                     "reopen_quality_score": round(reopen_quality, 4),
                     "lines_added_score": lines_added_score,
                     "lines_deleted_score": lines_deleted_score,
-                    # Other scores
+                    # Component 2 breakdown
+                    "component2_score": component2,
+                    "work_log_hours": total_hours,
                     "work_log_score": work_log_score,
                     "sentiment_score": sentiment_avg,
+                    # Other
                     "attendance_score": attendance_score,
                     "problem_solving": problem_solving,
                     "kpi": kpi,
