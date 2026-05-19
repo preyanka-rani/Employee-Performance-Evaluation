@@ -68,4 +68,8 @@ alembic.ini
 
 scripts
 
-Employee Performance Evaluation___.md
+monthly_report.py
+documentation/*
+
+test_outputs
+test2_outputs
