@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.models.scores import (
     AttendanceScore,
     CodeQualityScore,
+    DeveloperFinalScore,
     FinalScore,
     SentimentScore,
     TLAssessmentScore,
@@ -27,6 +28,18 @@ class CodeQualityRepository(BaseRepository[CodeQualityScore]):
             select(CodeQualityScore).where(
                 CodeQualityScore.evaluation_run_id == run_id,
                 CodeQualityScore.employee_email == email,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def get_by_run_id_and_emails(
+        self, run_id: int, emails: list[str]
+    ) -> list[CodeQualityScore]:
+        """Fetch all code quality rows for a run filtered to the given email list."""
+        result = await self._session.execute(
+            select(CodeQualityScore).where(
+                CodeQualityScore.evaluation_run_id == run_id,
+                CodeQualityScore.employee_email.in_(emails),
             )
         )
         return list(result.scalars().all())
@@ -185,3 +198,30 @@ class FinalScoreRepository(BaseRepository[FinalScore]):
             .limit(months_back)
         )
         return list(result.scalars().all())
+
+
+class DeveloperFinalScoreRepository(BaseRepository[DeveloperFinalScore]):
+    model = DeveloperFinalScore
+
+    async def get_by_run_id(
+        self, run_id: int, emails: list[str]
+    ) -> list[DeveloperFinalScore]:
+        result = await self._session.execute(
+            select(DeveloperFinalScore).where(
+                DeveloperFinalScore.evaluation_run_id == run_id,
+                DeveloperFinalScore.employee_email.in_(emails),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def get_by_employee_period(
+        self, employee_id: str, year: int, month: int
+    ) -> DeveloperFinalScore | None:
+        result = await self._session.execute(
+            select(DeveloperFinalScore).where(
+                DeveloperFinalScore.employee_id == employee_id,
+                DeveloperFinalScore.year == year,
+                DeveloperFinalScore.month == month,
+            )
+        )
+        return result.scalars().first()
