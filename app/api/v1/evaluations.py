@@ -137,7 +137,10 @@ async def bulk_run_evaluation(
     from app.repositories.employee_repository import EmployeeRepository
     from app.repositories.score_repository import TLAssessmentRepository
     from app.services.data_sources.excel_parser import ExcelParseError, parse_tl_excel
-    from app.services.reporting.report_generator import generate_excel_report
+    from app.services.reporting.report_generator import (
+        generate_code_quality_report,
+        generate_excel_report,
+    )
     from app.services.scoring.base import get_scorer
 
     log = _log.bind(team=team, year=year, month=month)
@@ -148,6 +151,52 @@ async def bulk_run_evaluation(
         content = await file.read()
         tl_rows = parse_tl_excel(content)
         log.info("excel_parsed_ok", row_count=len(tl_rows))
+
+        # ── 1b. Resolve missing employee_ids from MySQL ───────────────────────
+        missing_id_emails = [r.email for r in tl_rows if not r.employee_id]
+        if missing_id_emails:
+            from app.services.data_sources.mysql_client import MySQLCRMClient
+
+            crm = MySQLCRMClient()
+            try:
+                resolved = await crm.get_employee_ids_by_emails(missing_id_emails)
+            finally:
+                await crm.close()
+
+            still_missing: list[str] = []
+            for r in tl_rows:
+                if not r.employee_id:
+                    found_id = resolved.get(r.email)
+                    if found_id:
+                        r.employee_id = found_id
+                        log.info(
+                            "employee_id_resolved_from_mysql",
+                            email=r.email,
+                            employee_id=found_id,
+                        )
+                    else:
+                        still_missing.append(r.email)
+                        log.warning(
+                            "employee_id_not_found_in_mysql",
+                            email=r.email,
+                        )
+
+            # Drop rows that still have no employee_id
+            tl_rows = [r for r in tl_rows if r.employee_id]
+            if still_missing:
+                log.error(
+                    "employee_id_lookup_failed",
+                    emails=still_missing,
+                    message="Rows dropped — employee_id not found in MySQL users table",
+                )
+
+        if not tl_rows:
+            log.warning("excel_no_valid_rows_after_id_lookup")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No valid employee rows after employee_id resolution.",
+            )
+
         for r in tl_rows:
             log.debug(
                 "tl_row",
@@ -362,7 +411,26 @@ async def bulk_run_evaluation(
         report_path = None
         scoring_errors.append({"email": "report_generation", "error": str(exc)})
 
-    # ── 7. Return summary ─────────────────────────────────────────────────────
+    # ── 7. Generate Code Quality detail report ────────────────────────────────
+    cq_report_path: str | None = None
+    if team == "developer":
+        log.info("generating_code_quality_report", emails=emails)
+        try:
+            cq_report_path = await generate_code_quality_report(
+                run_id=run_id,
+                emails=emails,
+                team=team,
+                year=year,
+                month=month,
+                db=db,
+            )
+            log.info("cq_report_saved", path=cq_report_path)
+        except Exception as exc:
+            log.exception("cq_report_generation_failed", run_id=run_id, error=str(exc))
+            cq_report_path = None
+            scoring_errors.append({"email": "cq_report_generation", "error": str(exc)})
+
+    # ── 8. Return summary ─────────────────────────────────────────────────────
     summary = {
         "status": "partial" if partial else "success",
         "run_id": run_id,
@@ -372,6 +440,7 @@ async def bulk_run_evaluation(
         "processed_count": processed_count,
         "failed_count": failed_count,
         "report_path": report_path,
+        "cq_report_path": cq_report_path,
         "errors": scoring_errors if scoring_errors else [],
     }
     log.info("bulk_run_complete", **{k: v for k, v in summary.items() if k != "errors"})
