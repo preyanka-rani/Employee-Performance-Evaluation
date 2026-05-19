@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -47,6 +48,49 @@ from app.services.data_sources.commit_gitlab_client import (
 )
 
 logger = get_logger(__name__)
+
+# ── Doc/config-only detection ─────────────────────────────────────────────────
+# Bundles whose every file matches these extensions/basenames are documentation
+# or configuration files with no executable logic.  Sending them to the AI
+# wastes tokens and always returns the neutral 70 default — skip them.
+_DOC_ONLY_EXTENSIONS: frozenset[str] = frozenset(
+    {".md", ".txt", ".rst", ".markdown", ".mdx"}
+)
+_DOC_ONLY_BASENAMES: frozenset[str] = frozenset(
+    {
+        ".gitignore",
+        ".gitattributes",
+        ".editorconfig",
+        ".npmrc",
+        ".nvmrc",
+        "license",
+        "licence",
+        "changelog",
+        "readme",
+        "notice",
+        "authors",
+        "contributors",
+    }
+)
+
+
+def _is_doc_only_bundle(bundle: CommitBundle) -> bool:
+    """
+    Return True when every file in the bundle is a documentation or config file.
+    Such bundles should not be sent to the AI — they always score ~70 and waste
+    API quota.
+
+    A bundle with NO diffs is NOT considered doc-only (it is empty/broken).
+    """
+    if not bundle.diffs:
+        return False
+    for diff in bundle.diffs:
+        fp = diff.file_path.lower()
+        ext = Path(fp).suffix.lower()
+        basename = Path(fp).name.lower()
+        if ext not in _DOC_ONLY_EXTENSIONS and basename not in _DOC_ONLY_BASENAMES:
+            return False  # at least one real code file found
+    return True
 
 
 # ── Workflow State ────────────────────────────────────────────────────────────
@@ -121,6 +165,28 @@ async def analyze_bundles_node(state: CommitAnalysisState) -> CommitAnalysisStat
     semaphore = asyncio.Semaphore(3)
 
     async def _analyse_one(bundle: CommitBundle) -> CodeQualityResult | None:
+        # ── Skip doc/config-only bundles — no code to review ─────────────────
+        if _is_doc_only_bundle(bundle):
+            logger.info(
+                "bundle_doc_only_skipped",
+                bundle=bundle.analysis_reference,
+                files=[d.file_path for d in bundle.diffs],
+            )
+            return CodeQualityResult(
+                score=0.0,
+                readability=0.0,
+                logic_efficiency=0.0,
+                error_handling=0.0,
+                architecture=0.0,
+                security=0.0,
+                reasoning=(
+                    "Skipped: bundle contains only documentation/configuration "
+                    f"files ({len(bundle.diffs)} file(s)). No executable code to evaluate."
+                ),
+                issues=[],
+                model_used="doc_config_skipped",
+            )
+
         async with semaphore:
             diffs_payload = [
                 {"file_path": d.file_path, "diff_content": d.diff_content}
@@ -153,21 +219,49 @@ async def aggregate_scores_node(state: CommitAnalysisState) -> CommitAnalysisSta
     """
     Build persistable score rows and compute the aggregate quality score.
 
-    Falls back to 70.0 (conservative) when no bundles were successfully analysed.
-    The ``mr_scores`` list mirrors the MR workflow's format so DeveloperScorer
-    can write rows to ``code_quality_scores`` without modification.
+    Aggregate formula:
+        weighted_avg = Σ(commit_count_i × score_i) / Σ(commit_count_i)
+
+    Doc/config-only bundles (model_used="doc_config_skipped") are included in
+    the ``mr_scores`` DB rows for auditability but EXCLUDED from the weighted
+    average — they contain no code and should not dilute the score.
+
+    Falls back to 0.0 when no bundles were successfully analysed.
     """
     mr_scores: list[dict[str, Any]] = []
     bundles = state["bundles"]
 
     for bundle, result in zip(bundles, state["analysis_results"]):
         if result is None:
+            # AI analysis failed — still persist bundle metadata so commit count
+            # and line stats are visible in the report even when AI is unavailable.
+            mr_scores.append(
+                {
+                    "evaluation_run_id": state["evaluation_run_id"],
+                    "employee_email": state["employee_email"],
+                    "mr_reference": bundle.analysis_reference,
+                    "mr_title": bundle.analysis_title,
+                    "raw_score": 0.0,
+                    "readability_score": 0.0,
+                    "logic_efficiency_score": 0.0,
+                    "error_handling_score": 0.0,
+                    "architecture_score": 0.0,
+                    "security_score": 0.0,
+                    "reasoning": (
+                        "AI analysis failed — API unavailable or rate limited. "
+                        "Commit and line data are preserved; re-run when the API is restored."
+                    ),
+                    "issues": json.dumps([]),
+                    "model_used": "ai_failed",
+                    "lines_added": bundle.lines_added,
+                    "lines_deleted": bundle.lines_deleted,
+                }
+            )
             continue
         mr_scores.append(
             {
                 "evaluation_run_id": state["evaluation_run_id"],
                 "employee_email": state["employee_email"],
-                # reuse mr_reference / mr_title columns for commit bundle labels
                 "mr_reference": bundle.analysis_reference,
                 "mr_title": bundle.analysis_title,
                 "raw_score": result.score,
@@ -179,19 +273,32 @@ async def aggregate_scores_node(state: CommitAnalysisState) -> CommitAnalysisSta
                 "reasoning": result.reasoning,
                 "issues": json.dumps(result.issues),
                 "model_used": result.model_used,
+                # Line counts from the bundle (counted from diff content)
+                "lines_added": bundle.lines_added,
+                "lines_deleted": bundle.lines_deleted,
             }
         )
 
-    valid_scores = [r.score for r in state["analysis_results"] if r is not None]
-    if valid_scores:
-        aggregate = round(sum(valid_scores) / len(valid_scores), 2)
-    else:
-        aggregate = 70.0
+    # Weighted average — exclude doc/config-skipped bundles
+    total_weight = 0
+    weighted_sum = 0.0
+    for bundle, result in zip(bundles, state["analysis_results"]):
+        if result is None:
+            continue
+        if result.model_used == "doc_config_skipped":
+            continue  # no executable code — exclude from quality aggregate
+        weight = max(bundle.commit_count, 1)
+        weighted_sum += result.score * weight
+        total_weight += weight
+
+    aggregate = round(weighted_sum / total_weight, 2) if total_weight > 0 else 0.0
 
     logger.info(
         "aggregate_commit_scores",
         email=state["employee_email"],
-        bundle_count=len(valid_scores),
+        bundle_count=len(bundles),
+        scored_bundles=total_weight,
+        ai_failed=sum(1 for r in state["analysis_results"] if r is None),
         aggregate=aggregate,
     )
     return {**state, "mr_scores": mr_scores, "aggregate_score": aggregate}
