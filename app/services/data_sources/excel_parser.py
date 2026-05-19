@@ -333,9 +333,10 @@ def parse_tl_excel(content: bytes) -> list[TLRow]:
             email = str(row["email"]).strip().lower()
             name = str(row["name"]).strip()
 
-            if not emp_id or emp_id in ("nan", "none"):
-                parse_errors.append(f"Row {row_num}: employee_id is empty")
-                continue
+            # employee_id may be empty — leave it blank; the endpoint will
+            # resolve it via a MySQL lookup before processing starts.
+            if emp_id in ("nan", "none"):
+                emp_id = ""
             if not email or "@" not in email:
                 parse_errors.append(f"Row {row_num}: invalid email '{email}'")
                 continue

@@ -58,8 +58,8 @@ class MySQLCRMClient:
     def __init__(self) -> None:
         self._engine = create_async_engine(
             settings.mysql_crm_dsn,
-            pool_size=5,
-            max_overflow=10,
+            pool_size=1,
+            max_overflow=0,
             pool_pre_ping=True,
             echo=False,
         )
@@ -175,6 +175,33 @@ class MySQLCRMClient:
             for row in rows
         ]
 
+    async def get_employee_ids_by_emails(
+        self,
+        emails: list[str],
+    ) -> dict[str, str]:
+        """
+        Look up employee_id for each email from the CRM users table.
+        Returns {email: employee_id} for all emails that were found.
+        """
+        if not emails:
+            return {}
+
+        placeholders = ", ".join(f":email_{i}" for i in range(len(emails)))
+        params: dict = {f"email_{i}": email.lower() for i, email in enumerate(emails)}
+
+        sql = text(f"""
+            SELECT employee_id, LOWER(user_email) AS user_email
+            FROM users
+            WHERE user_status = 'active'
+              AND LOWER(user_email) IN ({placeholders})
+        """)
+
+        async with self._session_factory() as session:
+            result = await session.execute(sql, params)
+            rows = result.fetchall()
+
+        return {row.user_email: row.employee_id for row in rows if row.employee_id}
+
     async def close(self) -> None:
         await self._engine.dispose()
 
@@ -190,8 +217,8 @@ class MySQLHRClient:
     def __init__(self) -> None:
         self._engine = create_async_engine(
             settings.mysql_hr_dsn,
-            pool_size=5,
-            max_overflow=10,
+            pool_size=1,
+            max_overflow=0,
             pool_pre_ping=True,
             echo=False,
         )
