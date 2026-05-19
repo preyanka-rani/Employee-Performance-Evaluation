@@ -55,7 +55,10 @@ class CodeQualityScore(Base):
     issues: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON list
     model_used: Mapped[str] = mapped_column(
         String(100), nullable=False
-    )  # 'claude-sonnet-4-5' | 'llama-3.3-70b-versatile'
+    )  # 'claude-sonnet-4-5' | 'llama-3.3-70b-versatile' | 'doc_config_skipped'
+    # Lines added/deleted counted from the commit diffs for this bundle
+    lines_added: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lines_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -290,5 +293,130 @@ class FinalScore(Base):
     def __repr__(self) -> str:
         return (
             f"<FinalScore email={self.employee_email!r} "
+            f"{self.year}/{self.month:02d} final={self.final_score:.2f}>"
+        )
+
+
+class DeveloperFinalScore(Base):
+    """
+    Developer-team specific final score table.
+
+    Stores every sub-component used in the developer evaluation so that the
+    Excel report can show the full calculation breakdown without needing joins.
+
+    Segment A (50 marks total):
+      component1 (0-100):
+        ├─ code_quality_score  (0-100) × 30%
+        ├─ resolution_rate     (0-100) × 35%
+        ├─ reopen_quality      (0-100) × 15%
+        ├─ lines_added_score   (0-100) × 10%
+        └─ lines_deleted_score (0-100) × 10%
+      component2 (0-100) = work_log_score × 90% + sentiment_score × 10%
+      segment_a_score = (component1 + component2) / 2      (0-100)
+      segment_a_marks = segment_a_score × 50 / 100          (0-50)
+
+    Segment B (50 marks total):
+      attendance_marks  (0-10)
+      tl_problem_solving (0-10)
+      tl_kpi             (0-15)
+      tl_general         (0-15)
+      segment_b_marks   = attendance_marks + tl_total       (0-50)
+
+    Final:
+      base_total  = segment_a_marks + segment_b_marks       (0-100)
+      reward_score                                           (0-5)
+      final_score = ((base_total + reward) / 105) × 100     (0-100)
+    """
+
+    __tablename__ = "developer_final_scores"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    evaluation_run_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    # Employee identity (denormalised for fast reporting)
+    employee_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    employee_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    employee_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    # ── Component 1 sub-scores ────────────────────────────────────────────────
+    code_quality_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # AI aggregate, 0-100 → 30%
+    resolution_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # (resolved/assigned)*100 → 35%
+    reopen_quality_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 100 - reopen_rate → 15%
+    lines_added_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # tiered 0-100 → 10%
+    lines_deleted_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # tiered 0-100 → 10%
+    component1_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # weighted composite 0-100
+
+    # ── Component 2 sub-scores ────────────────────────────────────────────────
+    work_log_hours: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # raw hours from CRM
+    work_log_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # normalised 0-100
+    sentiment_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-100
+    component2_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # work_log×90% + sentiment×10%, 0-100
+
+    # ── Segment A ─────────────────────────────────────────────────────────────
+    segment_a_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # (comp1+comp2)/2, 0-100
+    segment_a_marks: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-50
+
+    # ── Segment B ─────────────────────────────────────────────────────────────
+    attendance_score: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-100
+    attendance_marks: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-10
+    tl_problem_solving: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-10
+    tl_kpi: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)  # 0-15
+    tl_general: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-15
+    tl_total: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)  # 0-40
+    segment_b_marks: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )  # 0-50
+
+    # ── Final ─────────────────────────────────────────────────────────────────
+    base_total: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reward_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    final_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<DeveloperFinalScore id={self.employee_id!r} "
             f"{self.year}/{self.month:02d} final={self.final_score:.2f}>"
         )
