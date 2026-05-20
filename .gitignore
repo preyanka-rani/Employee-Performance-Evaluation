@@ -58,8 +58,7 @@ htmlcov/
 
 # ── Script output / reports ──────────────────────────────────────────────────
 scripts/last_run_report.json
-outputs/reports/*.xlsx
-outputs/reports/*.xls
+outputs/*
 scripts/*.json
 
 pyproject.toml
@@ -73,3 +72,5 @@ documentation/*
 
 test_outputs
 test2_outputs
+developer_report.py
+developer_reports

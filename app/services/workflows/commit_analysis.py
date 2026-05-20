@@ -165,6 +165,32 @@ async def analyze_bundles_node(state: CommitAnalysisState) -> CommitAnalysisStat
     semaphore = asyncio.Semaphore(3)
 
     async def _analyse_one(bundle: CommitBundle) -> CodeQualityResult | None:
+        # ── No analyzable diffs: developer worked on config/doc files only ──
+        # Give a neutral score of 50 so the project is included in the report
+        # and the developer receives credit for the work (e.g. README updates,
+        # CI config, .env templates).  These bundles ARE included in the
+        # weighted aggregate (unlike doc_config_skipped bundles which are not).
+        if not bundle.diffs:
+            logger.info(
+                "bundle_no_code_diffs",
+                bundle=bundle.analysis_reference,
+            )
+            return CodeQualityResult(
+                score=50.0,
+                readability=50.0,
+                logic_efficiency=50.0,
+                error_handling=50.0,
+                architecture=50.0,
+                security=50.0,
+                reasoning=(
+                    "No analyzable code diffs found — developer worked on configuration, "
+                    "documentation, or other non-code files. "
+                    "Neutral score of 50 assigned to acknowledge the contribution."
+                ),
+                issues=[],
+                model_used="no_code_diffs",
+            )
+
         # ── Skip doc/config-only bundles — no code to review ─────────────────
         if _is_doc_only_bundle(bundle):
             logger.info(
@@ -279,13 +305,16 @@ async def aggregate_scores_node(state: CommitAnalysisState) -> CommitAnalysisSta
             }
         )
 
-    # Weighted average — exclude doc/config-skipped bundles
+    # Weighted average
+    # - doc_config_skipped bundles (diffs exist but all are docs): EXCLUDED
+    # - no_code_diffs bundles (empty diffs, config/md-only work): INCLUDED at score 50
+    # - ai_failed: EXCLUDED
     total_weight = 0
     weighted_sum = 0.0
     for bundle, result in zip(bundles, state["analysis_results"]):
         if result is None:
             continue
-        if result.model_used == "doc_config_skipped":
+        if result.model_used in ("doc_config_skipped", "ai_failed"):
             continue  # no executable code — exclude from quality aggregate
         weight = max(bundle.commit_count, 1)
         weighted_sum += result.score * weight
