@@ -1,13 +1,15 @@
 """
 app/services/data_sources/commit_gitlab_client.py
 ──────────────────────────────────────────────────
-Commit-based GitLab data source.
+Commit-based GitLab data source — REST API only, no direct DB connection.
 
 Strategy
 ────────
-1. PostgreSQL → find project_ids where the developer had push-events this month
-               (events.action = 5 means "pushed"; fast indexed query)
+1. GitLab Events REST API → /users/{user_id}/events to find all projects where
+                             the developer had ANY activity this month
+                             (push, MR, comment, review — all event types).
 2. GitLab REST API → per project, list commits filtered by author email + date range
+                     using ?all=true to search ALL branches (not just default).
 3. GitLab REST API → per commit sha, fetch the file-level diff
 4. Dedup → commits are returned newest-first; first occurrence of a file wins
            (keeps the most recent change when a file was touched many times)
@@ -17,20 +19,25 @@ Returns one CommitBundle per project — all unique file diffs aggregated for
 the month.  The downstream AI analysis receives the same MRDiff objects that
 the MR-based pipeline uses, so no other layer needs to change.
 
-Why commit-based beats MR-based for individual developer scoring
-────────────────────────────────────────────────────────────────
-• Exact attribution: every file in the result was committed by THIS developer.
-• Works even when developers push directly without raising an MR.
-• Month-bounded: only code committed in the evaluation period is scored.
-• Merge commits (which contain other people's code) are excluded.
+Why REST API events beats PostgreSQL internal DB for project discovery
+──────────────────────────────────────────────────────────────────────
+• No direct DB access required — uses public GitLab API only.
+• Catches ALL activity types (push, MR, comment, review) — none missed.
+• Works across all GitLab hosting configurations.
+• Identical strategy to the proven developer_report.py script.
+• ?all=true in commit queries searches every branch, not just default.
 """
 
 from __future__ import annotations
 
 import asyncio
+import calendar
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
+from types import SimpleNamespace
 from typing import Any
+
+import requests
 
 from app.core.config import get_settings
 from app.core.logging_config import get_logger
@@ -111,40 +118,18 @@ class CommitBundle:
 
 class CommitBasedGitLabClient:
     """
-    Finds what code a developer authored in a given month by combining:
-      • PostgreSQL (GitLab internal DB) for project discovery — fast, no pagination.
-      • GitLab REST API (python-gitlab) for commit metadata and file diffs.
+    Finds what code a developer authored in a given month using the GitLab REST API
+    exclusively — no direct database connection required.
+
+    Project discovery uses the GitLab Events REST API so ALL activity types are
+    captured (not just push events). Commit fetching uses ?all=true so all branches
+    are searched, not only the default branch.
 
     READ-ONLY.  No writes anywhere.
     """
 
     def __init__(self) -> None:
-        self._pg_pool: Any | None = None
         self._gl: Any | None = None
-
-    # ── Pool helpers ─────────────────────────────────────────────────────────
-
-    async def _get_pg_pool(self) -> Any:
-        """Lazily create an asyncpg connection pool to the GitLab PostgreSQL DB."""
-        if self._pg_pool is None:
-            try:
-                import asyncpg  # type: ignore[import]
-            except ImportError as exc:
-                raise RuntimeError(
-                    "asyncpg is required for commit-based analysis"
-                ) from exc
-
-            self._pg_pool = await asyncpg.create_pool(
-                host=settings.gitlab_db_host,
-                port=settings.gitlab_db_port,
-                database=settings.gitlab_db_name,
-                user=settings.gitlab_db_user,
-                password=settings.gitlab_db_password,
-                min_size=1,
-                max_size=5,
-                command_timeout=30,
-            )
-        return self._pg_pool
 
     def _get_gl(self) -> Any:
         """Lazily create a python-gitlab client (blocking, sync)."""
@@ -168,16 +153,21 @@ class CommitBasedGitLabClient:
         self, corporate_email: str
     ) -> dict[str, Any] | None:
         """
-        Resolve a corporate email to a real GitLab profile using multi-step matching.
+        Resolve a corporate email to a real GitLab profile.
 
-        Steps (in order of confidence):
-          1. Exact ``email`` field match
-          2. Exact ``public_email`` field match
-          3. ``username`` equals email prefix (e.g. "md.mehedi" == "md.mehedi")
-          4. Email prefix is a substring of ``email`` or ``username``
-          Fallback: single-result search → accept that result regardless
+        Strategy — mirrors developer_report.py:
+          1. Search GitLab users by email (``/users?search=<email>``).
+          2. Scan results for an exact email / public_email match or a match
+             where the email prefix appears in one of the email fields.
+          3. Fallback: take the first search result (same as script's data[0]).
 
-        Returns a dict with keys: id, username, email, name — or None.
+        NOTE: Username-based matching (Pass 2) was intentionally removed.
+        An exact username match (e.g. a bot named "dilruba") would intercept
+        before the fallback and return the wrong account.  GitLab ranks exact
+        email matches first in its search results, so data[0] is the correct
+        developer when email-based matching misses (e.g. private email).
+
+        Returns a dict with keys: id, username, email, public_email, name — or None.
         """
         email_prefix = corporate_email.split("@")[0].lower()
 
@@ -205,14 +195,18 @@ class CommitBasedGitLabClient:
                 "name": getattr(user, "name", "") or "",
             }
 
+        # Pass 1 — email-based matching (highest confidence).
+        # Checks ONLY email/public_email fields; deliberately ignores username.
+        # This prevents a service-account with username == email-prefix
+        # (e.g. a bot named "dilruba") from shadowing the real developer
+        # "dilrubayasmin095" whose email IS "dilruba@ba-systems.com".
+        target = corporate_email.lower()
         for user in results:
             p = _profile(user)
             u_email = p["email"].lower()
             u_pub = p["public_email"].lower()
-            u_uname = p["username"].lower()
-            target = corporate_email.lower()
 
-            # Step 1 – exact email
+            # Exact email or public_email match
             if u_email == target:
                 logger.info(
                     "gitlab_identity_exact_email",
@@ -220,7 +214,6 @@ class CommitBasedGitLabClient:
                     username=p["username"],
                 )
                 return p
-            # Step 2 – public_email
             if u_pub == target:
                 logger.info(
                     "gitlab_identity_public_email",
@@ -228,37 +221,30 @@ class CommitBasedGitLabClient:
                     username=p["username"],
                 )
                 return p
-            # Step 3 – username == prefix (exact)
-            if u_uname == email_prefix:
+            # Email-prefix appears inside one of the email fields
+            # e.g. "dilruba" in "dilruba@ba-systems.com" → True
+            if email_prefix and (email_prefix in u_email or email_prefix in u_pub):
                 logger.info(
-                    "gitlab_identity_username_prefix",
-                    email=corporate_email,
-                    username=p["username"],
-                )
-                return p
-            # Step 4 – prefix is substring of email or username
-            if email_prefix in u_email or email_prefix in u_uname:
-                logger.info(
-                    "gitlab_identity_prefix_substring",
+                    "gitlab_identity_email_prefix",
                     email=corporate_email,
                     username=p["username"],
                 )
                 return p
 
-        # Fallback – only one candidate
-        if len(results) == 1:
-            p = _profile(results[0])
-            logger.info(
-                "gitlab_identity_fallback_single",
-                email=corporate_email,
-                username=p["username"],
-            )
-            return p
-
-        logger.warning(
-            "gitlab_identity_unresolved", email=corporate_email, candidates=len(results)
+        # Fallback — mirrors developer_report.py which always uses data[0].
+        # GitLab orders results by relevance; searching by exact email puts the
+        # real developer first even if their email is private.
+        # NOTE: Pass 2 (username-based matching) was removed because an exact
+        # username match (e.g. bot named "dilruba") would be returned BEFORE
+        # this fallback, defeating the purpose. data[0] is safer and matches
+        # what developer_report.py does.
+        p = _profile(results[0])
+        logger.info(
+            "gitlab_identity_fallback_first",
+            email=corporate_email,
+            username=p["username"],
         )
-        return None
+        return p
 
     @staticmethod
     def _build_author_matches(
@@ -285,122 +271,99 @@ class CommitBasedGitLabClient:
         matches.discard("")
         return matches
 
-    # ── PostgreSQL project discovery ─────────────────────────────────────────
+    # ── Project discovery via GitLab Events REST API ────────────────────────────
 
-    async def get_developer_projects(
+    def _find_projects_via_events_sync(
         self,
-        username: str,
+        gitlab_user_id: int,
         year: int,
         month: int,
     ) -> list[dict[str, Any]]:
         """
-        Return distinct projects where the developer had push-events this month.
+        Primary project discovery via the GitLab Events REST API.
 
-        Uses GitLab's internal ``events`` table (action = 5 → pushed).
-        A single indexed query; does not depend on REST API pagination.
+        Mirrors developer_report.py's get_user_active_projects() strategy:
+        fetches ALL event types for the user in the given month and collects
+        every distinct project_id. Then resolves each project_id to a path.
+
+        Catches pushes, MR activity, comments, reviews — any GitLab interaction
+        that references a project. More complete than a push-only query.
         """
-        start = datetime(year, month, 1)
-        end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+        raw_url = (settings.gitlab_url or "").rstrip("/")
+        base_url = raw_url if raw_url.endswith("/api/v4") else f"{raw_url}/api/v4"
+        headers = {"PRIVATE-TOKEN": settings.gitlab_token}
 
-        pool = await self._get_pg_pool()
+        start_date = date(year, month, 1).strftime("%Y-%m-%d")
+        last_day = calendar.monthrange(year, month)[1]
+        end_date = date(year, month, last_day).strftime("%Y-%m-%d")
 
-        query = """
-            SELECT DISTINCT
-                e.project_id,
-                p.path        AS project_path,
-                n.path        AS namespace_path
-            FROM events e
-            JOIN users       u ON e.author_id   = u.id
-            JOIN projects    p ON e.project_id  = p.id
-            JOIN namespaces  n ON p.namespace_id = n.id
-            WHERE u.username = $1
-              AND e.action   = 5
-              AND e.created_at >= $2
-              AND e.created_at <  $3
-            ORDER BY e.project_id
-        """
+        project_ids: set[int] = set()
+        page = 1
 
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(query, username, start, end)
+        while True:
+            try:
+                resp = requests.get(
+                    f"{base_url}/users/{gitlab_user_id}/events",
+                    headers=headers,
+                    params={
+                        "after": start_date,
+                        "before": end_date,
+                        "per_page": 100,
+                        "page": page,
+                    },
+                    timeout=30,
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "rest_events_bad_status",
+                        user_id=gitlab_user_id,
+                        status=resp.status_code,
+                    )
+                    break
+                events = resp.json()
+            except Exception as exc:
+                logger.warning("rest_events_request_failed", error=str(exc))
+                break
 
-        projects = [
-            {
-                "project_id": row["project_id"],
-                "project_path": f"{row['namespace_path']}/{row['project_path']}",
-            }
-            for row in rows
-        ]
+            if not events:
+                break
+
+            for event in events:
+                pid = event.get("project_id")
+                if pid:
+                    project_ids.add(int(pid))
+
+            if len(events) < 100:
+                break
+            page += 1
 
         logger.info(
-            "commit_projects_found",
-            username=username,
-            year=year,
-            month=month,
-            count=len(projects),
+            "events_projects_found",
+            user_id=gitlab_user_id,
+            count=len(project_ids),
         )
-        return projects
 
-    async def get_developer_projects_extended(
-        self,
-        username_candidates: list[str],
-        corporate_email: str,
-        year: int,
-        month: int,
-    ) -> list[dict[str, Any]]:
-        """
-        Extended project discovery — matches on username OR email in the GitLab
-        events table.  Accepts multiple username candidates (e.g. resolved
-        GitLab username + fallback employee_id) so we never miss a developer
-        whose username doesn't exactly match what's stored in the system.
-        """
-        start = datetime(year, month, 1)
-        end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+        # Resolve project paths
+        gl = self._get_gl()
+        results: list[dict[str, Any]] = []
+        for proj_id in project_ids:
+            try:
+                p = gl.projects.get(proj_id)
+                results.append(
+                    {
+                        "project_id": proj_id,
+                        "project_path": p.path_with_namespace,
+                    }
+                )
+            except Exception as exc:
+                logger.warning(
+                    "rest_events_project_get_failed", project_id=proj_id, error=str(exc)
+                )
+                results.append(
+                    {"project_id": proj_id, "project_path": f"project-{proj_id}"}
+                )
 
-        pool = await self._get_pg_pool()
-
-        # Filter out empty / None values
-        candidates = [c for c in username_candidates if c]
-
-        query = """
-            SELECT DISTINCT
-                e.project_id,
-                p.path        AS project_path,
-                n.path        AS namespace_path
-            FROM events e
-            JOIN users       u ON e.author_id   = u.id
-            JOIN projects    p ON e.project_id  = p.id
-            JOIN namespaces  n ON p.namespace_id = n.id
-            WHERE (
-                u.username = ANY($1)
-                OR u.email = $2
-                OR u.public_email = $2
-            )
-              AND e.action   = 5
-              AND e.created_at >= $3
-              AND e.created_at <  $4
-            ORDER BY e.project_id
-        """
-
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(query, candidates, corporate_email, start, end)
-
-        projects = [
-            {
-                "project_id": row["project_id"],
-                "project_path": f"{row['namespace_path']}/{row['project_path']}",
-            }
-            for row in rows
-        ]
-
-        logger.info(
-            "commit_projects_extended",
-            username_candidates=candidates,
-            corporate_email=corporate_email,
-            year=year,
-            month=month,
-            count=len(projects),
-        )
-        return projects
+        return results
 
     # ── REST API helpers (blocking — run in executor) ─────────────────────────
 
@@ -415,16 +378,27 @@ class CommitBasedGitLabClient:
         List commits for *project_id* authored by *author_email* in [since, until).
         Runs in a thread executor (python-gitlab is synchronous).
         Returns commits newest-first (GitLab API default).
+
+        NOTE: Fetches ALL commits without a server-side author filter and
+        filters client-side by email prefix. GitLab's ``author`` parameter
+        is unreliable for email-based filtering.
         """
+        email_prefix = author_email.split("@")[0].lower()
         try:
             project = self._get_gl().projects.get(project_id)
-            commits = project.commits.list(
-                author=author_email,
+            all_commits = project.commits.list(
                 since=since,
                 until=until,
-                all=True,
+                query_parameters={"all": "true"},  # all branches
+                get_all=True,  # all pages
             )
-            return list(commits)
+            result = []
+            for c in all_commits:
+                a_email = (getattr(c, "author_email", "") or "").lower()
+                a_name = (getattr(c, "author_name", "") or "").lower()
+                if email_prefix in a_email or email_prefix in a_name:
+                    result.append(c)
+            return result
         except Exception as exc:
             logger.warning("commit_list_failed", project_id=project_id, error=str(exc))
             return []
@@ -451,24 +425,75 @@ class CommitBasedGitLabClient:
     ) -> list[Any]:
         """
         List commits with per-commit additions/deletions stats.
-        Uses with_stats=True so each commit object includes a stats dict.
-        Runs in a thread executor (python-gitlab is synchronous).
+
+        Mirrors developer_report.py's get_project_commits_for_developer() exactly:
+          • Uses the GitLab REST API directly via ``requests`` (NOT python-gitlab)
+            so that ``all=true`` and ``with_stats=true`` are sent as lowercase
+            string parameters — python-gitlab converts bool True→"True" which
+            GitLab silently ignores, causing wrong counts and zero line stats.
+          • Fetches all pages (per_page=100, stops when len(page) < 100).
+          • Client-side filter: email_prefix in author_email OR in author_name.
+
+        Returns a list of SimpleNamespace objects with attributes:
+          id, title, authored_date, stats (dict with additions/deletions/total)
         """
-        try:
-            project = self._get_gl().projects.get(project_id)
-            commits = project.commits.list(
-                author=author_email,
-                since=since,
-                until=until,
-                all=True,
-                with_stats=True,
-            )
-            return list(commits)
-        except Exception as exc:
-            logger.warning(
-                "commit_stats_list_failed", project_id=project_id, error=str(exc)
-            )
-            return []
+        raw_url = (settings.gitlab_url or "").rstrip("/")
+        base_url = raw_url if raw_url.endswith("/api/v4") else f"{raw_url}/api/v4"
+        headers = {"PRIVATE-TOKEN": settings.gitlab_token}
+        email_prefix = author_email.split("@")[0].lower()
+        results: list[Any] = []
+        page = 1
+
+        while True:
+            url = f"{base_url}/projects/{project_id}/repository/commits"
+            params = {
+                "since": since,
+                "until": until,
+                "all": "true",  # all branches — must be lowercase string
+                "with_stats": "true",  # per-commit stats — must be lowercase string
+                "per_page": 100,
+                "page": page,
+            }
+            try:
+                resp = requests.get(url, headers=headers, params=params, timeout=30)
+                if resp.status_code != 200:
+                    logger.warning(
+                        "commit_stats_api_error",
+                        project_id=project_id,
+                        status=resp.status_code,
+                    )
+                    break
+                data = resp.json()
+            except Exception as exc:
+                logger.warning(
+                    "commit_stats_list_failed", project_id=project_id, error=str(exc)
+                )
+                break
+
+            if not data or not isinstance(data, list):
+                break
+
+            for commit in data:
+                a_email = (commit.get("author_email", "") or "").lower()
+                a_name = (commit.get("author_name", "") or "").lower()
+                if email_prefix in a_email or email_prefix in a_name:
+                    # Wrap in SimpleNamespace so callers use attribute access
+                    # (same interface as python-gitlab commit objects)
+                    results.append(
+                        SimpleNamespace(
+                            id=commit.get("id", ""),
+                            title=commit.get("title", ""),
+                            authored_date=commit.get("authored_date", ""),
+                            # stats is a dict: {additions, deletions, total}
+                            stats=commit.get("stats"),
+                        )
+                    )
+
+            if len(data) < 100:
+                break
+            page += 1
+
+        return results
 
     def _list_commits_multi_match_sync(
         self,
@@ -477,80 +502,54 @@ class CommitBasedGitLabClient:
         author_matches: set[str],
         since: str,
         until: str,
+        author_email: str = "",
     ) -> list[Any]:
         """
-        Fetch commits for a project using multi-step author matching.
+        Fetch commits for a project using client-side author matching.
 
-        Strategy (in order):
-          1. Try each email candidate via the GitLab ``author`` filter
-             (fast — server-side filtering; GitLab matches by name OR email).
-          2. If still no commits found, fetch ALL commits for the period and
-             filter client-side against ``author_matches`` by checking
-             author_email, author_name, committer_email, committer_name.
-             (Handles cases where the developer uses an unregistered git email.)
+        Always fetches ALL commits for the period without a server-side author
+        filter — GitLab's ``author`` query parameter is unreliable for
+        email-based queries (it performs a partial/domain match that returns
+        ALL commits from the same email domain, not just the target developer).
+
+        Filters client-side using exactly the same logic as developer_report.py:
+            email_prefix in author_email  OR  email_prefix in author_name
+        where email_prefix = author_email.split("@")[0].lower().
+        Only author_email and author_name are checked (not committer fields).
 
         Results are deduplicated by commit SHA.
+        ``email_candidates`` and ``author_matches`` are kept in the signature
+        for API compatibility but are no longer used internally.
         """
+        email_prefix = author_email.split("@")[0].lower() if author_email else ""
+
         try:
             project = self._get_gl().projects.get(project_id)
         except Exception as exc:
             logger.warning("project_get_failed", project_id=project_id, error=str(exc))
             return []
 
-        seen: dict[str, Any] = {}
-
-        # ── Step 1: server-side filter per email candidate ────────────────────
-        for candidate_email in email_candidates:
-            try:
-                commits = project.commits.list(
-                    author=candidate_email,
-                    since=since,
-                    until=until,
-                    all=True,
-                )
-                for c in commits:
-                    if c.id not in seen:
-                        seen[c.id] = c
-            except Exception as exc:
-                logger.warning(
-                    "commit_list_email_failed",
-                    project_id=project_id,
-                    email=candidate_email,
-                    error=str(exc),
-                )
-
-        if seen:
-            return list(seen.values())
-
-        # ── Step 2: client-side fallback (no commits found via email) ─────────
-        logger.info(
-            "commit_clientside_fallback",
-            project_id=project_id,
-            email_candidates=list(email_candidates),
-        )
         try:
-            all_commits = project.commits.list(since=since, until=until, all=True)
+            all_commits = project.commits.list(
+                since=since,
+                until=until,
+                query_parameters={"all": "true"},  # all branches
+                get_all=True,  # all pages
+            )
         except Exception as exc:
             logger.warning(
                 "commit_list_all_failed", project_id=project_id, error=str(exc)
             )
             return []
 
+        seen: dict[str, Any] = {}
         for c in all_commits:
             if c.id in seen:
                 continue
-            c_fields = [
-                (getattr(c, "author_email", "") or "").lower(),
-                (getattr(c, "author_name", "") or "").lower(),
-                (getattr(c, "committer_email", "") or "").lower(),
-                (getattr(c, "committer_name", "") or "").lower(),
-            ]
-            # Match: any token in author_matches appears IN any commit field
-            if any(
-                any(token in field for token in author_matches)
-                for field in c_fields
-                if field
-            ):
+            a_email = (getattr(c, "author_email", "") or "").lower()
+            a_name = (getattr(c, "author_name", "") or "").lower()
+            # Mirror developer_report.py: email prefix in author_email or author_name
+            if email_prefix and (email_prefix in a_email or email_prefix in a_name):
                 seen[c.id] = c
 
         logger.info(
@@ -584,22 +583,16 @@ class CommitBasedGitLabClient:
         gitlab_identity: dict[str, Any] | None = await loop.run_in_executor(
             None, self._resolve_gitlab_identity_sync, author_email
         )
-        resolved_username = gitlab_identity.get("username") if gitlab_identity else None
+        if not gitlab_identity:
+            return {"total_additions": 0, "total_deletions": 0}
 
-        username_candidates: list[str] = []
-        if resolved_username:
-            username_candidates.append(resolved_username)
-        if username and username not in username_candidates:
-            username_candidates.append(username)
-        email_prefix = author_email.split("@")[0]
-        if email_prefix not in username_candidates:
-            username_candidates.append(email_prefix)
-
-        projects = await self.get_developer_projects_extended(
-            username_candidates=username_candidates,
-            corporate_email=author_email,
-            year=year,
-            month=month,
+        gitlab_user_id: int = gitlab_identity["id"]
+        projects = await loop.run_in_executor(
+            None,
+            self._find_projects_via_events_sync,
+            gitlab_user_id,
+            year,
+            month,
         )
         if not projects:
             return {"total_additions": 0, "total_deletions": 0}
@@ -659,17 +652,19 @@ class CommitBasedGitLabClient:
         Pipeline
         ────────
         1. Resolve identity  → call GitLab Users API with ``author_email``
-                               and apply multi-step profile matching to find
-                               the actual GitLab username + email.
-        2. Build author set  → {corporate_email, gitlab_email, gitlab_username,
-                                email_prefix, display_name}
-        3. Discover projects → PostgreSQL events table using all username
-                               candidates + corporate_email (extended query).
-        4. Per project       → fetch commits via server-side email filter for
-                               every email in the author set; fall back to
-                               full-project client-side scan if nothing found.
-        5. Drop merge commits; deduplicate diffs newest-first.
-        6. Return one CommitBundle per project (empty projects omitted).
+                               using email-first two-pass matching; falls back
+                               to data[0] like developer_report.py.
+        2. Discover projects → GitLab Events REST API using the resolved user_id.
+                               Captures ALL activity types (push, MR, comment…)
+                               so no project is missed.
+        3. Per project       → fetch commits with stats via email_prefix filter
+                               on author_email + author_name (mirrors script).
+                               Uses ?all=true to search ALL branches.
+        4. Commit count      → total matched commits INCLUDING merge commits
+                               (mirrors developer_report.py exactly).
+        5. Lines             → summed from per-commit stats (mirrors script).
+        6. AI diffs          → non-merge commits only, deduplicated newest-first.
+        7. Return one CommitBundle per project (zero-commit projects omitted).
         """
         loop = asyncio.get_event_loop()
 
@@ -688,39 +683,26 @@ class CommitBasedGitLabClient:
             fallback_username=username,
         )
 
-        # ── Step 2: Build author match set ────────────────────────────────────
-        author_matches = self._build_author_matches(author_email, gitlab_identity)
-        email_candidates = {m for m in author_matches if "@" in m}
+        # ── Step 2: Discover projects via GitLab Events REST API ─────────────
+        if not gitlab_identity:
+            logger.info(
+                "commit_no_identity",
+                corporate_email=author_email,
+            )
+            return []
 
-        logger.info(
-            "author_matches_built",
-            email=author_email,
-            matches=sorted(author_matches),
-        )
-
-        # ── Step 3: Discover projects (extended — username + email) ───────────
-        username_candidates: list[str] = []
-        if resolved_username:
-            username_candidates.append(resolved_username)
-        # Always include the provided username as a fallback (employee_id etc.)
-        if username and username not in username_candidates:
-            username_candidates.append(username)
-        # Also add the email prefix as a username candidate
-        email_prefix = author_email.split("@")[0]
-        if email_prefix not in username_candidates:
-            username_candidates.append(email_prefix)
-
-        projects = await self.get_developer_projects_extended(
-            username_candidates=username_candidates,
-            corporate_email=author_email,
-            year=year,
-            month=month,
+        gitlab_user_id: int = gitlab_identity["id"]
+        projects = await loop.run_in_executor(
+            None,
+            self._find_projects_via_events_sync,
+            gitlab_user_id,
+            year,
+            month,
         )
 
         if not projects:
             logger.info(
                 "commit_no_projects",
-                username_candidates=username_candidates,
                 corporate_email=author_email,
                 year=year,
                 month=month,
@@ -729,9 +711,11 @@ class CommitBasedGitLabClient:
 
         # ISO-8601 boundaries for the REST API
         start_date = date(year, month, 1)
-        end_date = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        # Commit date range: mirrors developer_report.py exactly
+        # Script uses last_day T23:59:59Z, not next-month T00:00:00Z
+        last_day_of_month = calendar.monthrange(year, month)[1]
         since_str = start_date.isoformat() + "T00:00:00Z"
-        until_str = end_date.isoformat() + "T00:00:00Z"
+        until_str = date(year, month, last_day_of_month).isoformat() + "T23:59:59Z"
 
         bundles: list[CommitBundle] = []
 
@@ -739,41 +723,67 @@ class CommitBasedGitLabClient:
             project_id: int = proj["project_id"]
             project_path: str = proj["project_path"]
 
-            # ── Step 4: Fetch commits (multi-email + client-side fallback) ────
-            commits: list[Any] = await loop.run_in_executor(
+            # ── Step 4: Fetch commits with per-commit stats ───────────────────
+            # Uses email_prefix filtering on author_email + author_name — exactly
+            # mirrors developer_report.py's commit attribution logic.
+            # with_stats=True means additions/deletions come from commit metadata
+            # (same as developer_report.py which sums stats per commit).
+            commits_all: list[Any] = await loop.run_in_executor(
                 None,
-                self._list_commits_multi_match_sync,
+                self._list_commits_with_stats_sync,
                 project_id,
-                email_candidates,
-                author_matches,
+                author_email,
                 since_str,
                 until_str,
             )
 
-            # Drop merge commits (contain other people's code)
-            commits = [
-                c
-                for c in commits
-                if not _is_merge_commit(getattr(c, "title", "") or "")
-            ]
-            if not commits:
-                continue
+            # Commit count matches developer_report.py: ALL matched commits
+            # including merge commits (script counts them without removal)
+            total_commit_count = len(commits_all)
+            if total_commit_count == 0:
+                continue  # script only includes projects with commit_count > 0
+
+            # Sum line stats from commit metadata — same as developer_report.py
+            # which sums commit['stats']['additions'] and ['deletions']
+            total_lines_added = 0
+            total_lines_deleted = 0
+            for c in commits_all:
+                stats = getattr(c, "stats", None)
+                if stats is None:
+                    continue
+                if isinstance(stats, dict):
+                    total_lines_added += int(stats.get("additions", 0) or 0)
+                    total_lines_deleted += int(stats.get("deletions", 0) or 0)
+                else:
+                    total_lines_added += int(getattr(stats, "additions", 0) or 0)
+                    total_lines_deleted += int(getattr(stats, "deletions", 0) or 0)
 
             logger.info(
                 "commit_project_commits",
                 project=project_path,
-                commit_count=len(commits),
+                commit_count=total_commit_count,
+                lines_added=total_lines_added,
+                lines_deleted=total_lines_deleted,
             )
 
+            # Filter merge commits for AI diff analysis only — merge diffs contain
+            # other developers' code and would skew the quality score.
+            # Does NOT affect commit_count or lines (already captured above).
+            analysis_commits = [
+                c
+                for c in commits_all
+                if not _is_merge_commit(getattr(c, "title", "") or "")
+            ]
+
             # ── Step 5: Collect diffs, deduplicate by file path ───────────────
-            # Commits may arrive in any order; sort newest-first by authored_date
-            commits.sort(
+            # Sort newest-first so the latest version of each file wins
+            analysis_commits.sort(
                 key=lambda c: getattr(c, "authored_date", "") or "",
                 reverse=True,
             )
             latest_diffs: dict[str, MRDiff] = {}
 
-            for commit in commits:
+            for commit in analysis_commits:
                 diff_files: list[dict[str, Any]] = await loop.run_in_executor(
                     None,
                     self._get_commit_diff_sync,
@@ -797,34 +807,32 @@ class CommitBasedGitLabClient:
                         diff_content=_truncate_diff(content),
                     )
 
-            if not latest_diffs:
-                continue
-
+            # Always create a bundle — even if no analyzable diffs were found
+            # (e.g. developer only touched config/md files). The downstream
+            # workflow assigns score=50 for empty-diff bundles so the
+            # developer still receives credit for the work they did.
             diffs = list(latest_diffs.values())
-            added, deleted = _count_diff_lines(diffs)
             bundles.append(
                 CommitBundle(
                     project_id=project_id,
                     project_path=project_path,
-                    commit_count=len(commits),
+                    commit_count=total_commit_count,  # matches script: incl. merge commits
                     file_count=len(diffs),
                     period=f"{year}-{month:02d}",
                     diffs=diffs,
-                    lines_added=added,
-                    lines_deleted=deleted,
+                    lines_added=total_lines_added,  # matches script: from commit stats
+                    lines_deleted=total_lines_deleted,  # matches script: from commit stats
                 )
             )
 
         logger.info(
             "commit_bundles_ready",
-            username_candidates=username_candidates,
+            email=author_email,
             project_count=len(bundles),
             total_files=sum(b.file_count for b in bundles),
         )
         return bundles
 
     async def close(self) -> None:
-        """Release the PostgreSQL connection pool."""
-        if self._pg_pool is not None:
-            await self._pg_pool.close()
-            self._pg_pool = None
+        """No persistent resources to release."""
+        pass
