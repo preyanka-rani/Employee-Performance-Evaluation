@@ -111,7 +111,14 @@ async def get_evaluation_status(
 
 @router.post("/bulk-run", status_code=status.HTTP_200_OK)
 async def bulk_run_evaluation(
-    team: str = Form(..., description="Team name, e.g. 'developer'"),
+    team: str = Form(
+        ...,
+        description=(
+            "Team name — any human-readable form accepted for any team. "
+            "Examples: 'developer', 'Tech Support', 'Implementation & ITS', "
+            "'tech_support', 'impl_its', 'onsite_support', 'production'."
+        ),
+    ),
     month: int = Form(..., ge=1, le=12, description="Evaluation month (1-12)"),
     year: int = Form(..., ge=2020, description="Evaluation year"),
     file: UploadFile = File(
@@ -141,9 +148,31 @@ async def bulk_run_evaluation(
         generate_code_quality_report,
         generate_excel_report,
     )
-    from app.services.scoring.base import get_scorer
+    from app.services.scoring.base import get_scorer, resolve_team_key
 
-    log = _log.bind(team=team, year=year, month=month)
+    # ── 0. Resolve team key and route non-developer teams ─────────────────────
+    try:
+        team_key = resolve_team_key(team)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    if team_key != "developer":
+        from app.api.v1.support_evaluations import execute_support_bulk_run
+
+        content = await file.read()
+        return await execute_support_bulk_run(
+            team_key=team_key,
+            year=year,
+            month=month,
+            file_bytes=content,
+            filename=file.filename or "",
+            db=db,
+        )
+
+    # ── Developer flow below ──────────────────────────────────────────────────
+    log = _log.bind(team=team_key, year=year, month=month)
 
     # ── 1. Parse Excel ────────────────────────────────────────────────────────
     log.info("bulk_run_start", filename=file.filename, size=file.size)
@@ -235,7 +264,7 @@ async def bulk_run_evaluation(
         EvaluationRun(
             year=year,
             month=month,
-            team=team,
+            team=team_key,
             status=EvaluationStatus.RUNNING,
             triggered_by="api",
         )
@@ -260,7 +289,7 @@ async def bulk_run_evaluation(
                     employee_id=tl_row.employee_id,
                     name=tl_row.name,
                     email=tl_row.email,
-                    team=team,
+                    team=team_key,
                     gitlab_username=tl_row.gitlab_username,
                     is_active=True,
                 )
@@ -269,7 +298,7 @@ async def bulk_run_evaluation(
             # Update mutable fields in place
             emp.name = tl_row.name
             emp.email = tl_row.email
-            emp.team = team
+            emp.team = team_key
             if tl_row.gitlab_username:
                 emp.gitlab_username = tl_row.gitlab_username
 
@@ -301,9 +330,9 @@ async def bulk_run_evaluation(
     await db.commit()
 
     # ── 4. Run scorer per employee ────────────────────────────────────────────
-    log.info("starting_scorer", team=team)
+    log.info("starting_scorer", team=team_key)
     try:
-        scorer = get_scorer(team)
+        scorer = get_scorer(team_key)
         log.info("scorer_loaded", scorer=type(scorer).__name__)
     except ValueError as exc:
         log.error("scorer_not_found", team=team, error=str(exc))
@@ -400,7 +429,7 @@ async def bulk_run_evaluation(
         report_path = await generate_excel_report(
             run_id=run_id,
             emails=emails,
-            team=team,
+            team=team_key,
             year=year,
             month=month,
             db=db,
@@ -413,13 +442,13 @@ async def bulk_run_evaluation(
 
     # ── 7. Generate Code Quality detail report ────────────────────────────────
     cq_report_path: str | None = None
-    if team == "developer":
+    if team_key == "developer":
         log.info("generating_code_quality_report", emails=emails)
         try:
             cq_report_path = await generate_code_quality_report(
                 run_id=run_id,
                 emails=emails,
-                team=team,
+                team=team_key,
                 year=year,
                 month=month,
                 db=db,
@@ -434,7 +463,7 @@ async def bulk_run_evaluation(
     summary = {
         "status": "partial" if partial else "success",
         "run_id": run_id,
-        "team": team,
+        "team": team_key,
         "year": year,
         "month": month,
         "processed_count": processed_count,
