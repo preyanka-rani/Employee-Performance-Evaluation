@@ -13,6 +13,8 @@ No HTTP routes are defined here.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,6 +76,13 @@ async def execute_support_bulk_run(
 
     tl_rows = parse_result.rows
     parse_errors = parse_result.errors
+    # Original column names from the uploaded Excel (canonical → original header)
+    col_names: dict[str, str] = parse_result.col_names
+    # Team display name: taken from the first row’s parsed team_name cell; falls
+    # back to the normalised team_key when the Excel has no team column.
+    team_display_name: str = (
+        tl_rows[0].team_name if (tl_rows and tl_rows[0].team_name) else team_key
+    )
 
     if parse_errors:
         log.warning("support_excel_parse_warnings", warnings=parse_errors)
@@ -201,6 +210,104 @@ async def execute_support_bulk_run(
     scorer = get_scorer(team_key)
     log.info("support_scorer_loaded", scorer=type(scorer).__name__)
 
+    # ── 6a. Batch-fetch all MySQL data for the whole team at once ─────────────
+    # This reduces MySQL load from N×3 queries to 3 queries total, preventing
+    # max_queries_per_hour / max_connections_per_hour exhaustion.
+    all_employee_ids = [r.employee_id for r in tl_rows if r.employee_id]
+
+    from app.services.support_teams.data_sources.crm_client import (  # noqa: PLC0415
+        SupportCRMClient,
+    )
+    from app.services.support_teams.data_sources.tickets_client import (  # noqa: PLC0415
+        SupportTicketsClient,
+    )
+    from app.services.data_sources.mysql_client import MySQLHRClient  # noqa: PLC0415
+
+    batch_crm_hours: list[dict] = []
+    batch_crm_descs: list[dict] = []
+    batch_tickets: list[dict] = []
+    batch_attendance: list[dict] = []
+
+    if all_employee_ids:
+        crm_client = SupportCRMClient()
+        tickets_client = SupportTicketsClient()
+        hr_client = MySQLHRClient()
+        try:
+            batch_crm_hours, batch_crm_descs, batch_tickets, batch_attendance = (
+                await asyncio.gather(
+                    crm_client.get_crm_log_hours(all_employee_ids, year, month),
+                    crm_client.get_crm_descriptions(all_employee_ids, year, month),
+                    tickets_client.get_ticket_scores(all_employee_ids, year, month),
+                    hr_client.get_attendance(all_employee_ids, year, month),
+                    return_exceptions=False,
+                )
+            )
+            log.info(
+                "support_batch_mysql_fetch_done",
+                crm_hours=len(batch_crm_hours),
+                crm_descs=len(batch_crm_descs),
+                tickets=len(batch_tickets),
+                attendance=len(batch_attendance),
+            )
+        except Exception as exc:
+            # Non-fatal: fall back to per-employee fetch inside the workflow
+            log.warning(
+                "support_batch_mysql_fetch_failed",
+                error=str(exc),
+                fallback="per_employee_fetch",
+            )
+            batch_crm_hours = []
+            batch_crm_descs = []
+            batch_tickets = []
+            batch_attendance = []
+        finally:
+            await asyncio.gather(
+                crm_client.close(),
+                tickets_client.close(),
+                hr_client.close(),
+                return_exceptions=True,
+            )
+
+    # Build pre-fetched CRM log records (hours merged with descriptions per email)
+    # keyed by lowercase email so the scoring loop can look them up in O(1).
+    _crm_hours_by_id: dict[str, dict] = {
+        r["employee_id"]: r for r in batch_crm_hours if r.get("employee_id")
+    }
+    _crm_descs_by_id: dict[str, list[str]] = {}
+    for d in batch_crm_descs:
+        eid = d.get("employee_id") or ""
+        _crm_descs_by_id.setdefault(eid, []).append(d.get("description", ""))
+
+    def _crm_log_records_for(employee_id: str, email: str) -> list[dict]:
+        h = _crm_hours_by_id.get(employee_id)
+        if h is None:
+            return []
+        return [{**h, "descriptions": _crm_descs_by_id.get(employee_id, [])}]
+
+    # Ticket records per email
+    _tickets_by_email: dict[str, dict] = {
+        r["user_email"].lower(): r for r in batch_tickets if r.get("user_email")
+    }
+
+    def _ticket_records_for(email: str) -> list[dict]:
+        row = _tickets_by_email.get(email.lower())
+        return [row] if row else []
+
+    # Attendance records per email
+    _att_by_email: dict[str, dict] = {
+        r.get("user_email", "").lower(): r
+        for r in batch_attendance
+        if r.get("user_email")
+    }
+
+    def _attendance_records_for(email: str) -> list[dict]:
+        row = _att_by_email.get(email.lower())
+        return [row] if row else []
+
+    use_batch = bool(
+        all_employee_ids and (batch_crm_hours or batch_tickets or batch_attendance)
+    )
+
     processed_count = 0
     failed_count = 0
     result_list: list[SupportEmployeeResult] = []
@@ -221,13 +328,29 @@ async def execute_support_bulk_run(
 
         log.info("scoring_support_employee", email=row.employee_email)
         try:
-            result = await scorer.calculate(
-                employee=emp,
-                evaluation_run_id=run_id,
-                year=year,
-                month=month,
-                db=db,
-            )
+            if use_batch:
+                result = await scorer.calculate(
+                    employee=emp,
+                    evaluation_run_id=run_id,
+                    year=year,
+                    month=month,
+                    db=db,
+                    prefetched_crm_log_records=_crm_log_records_for(
+                        row.employee_id or "", row.employee_email
+                    ),
+                    prefetched_ticket_records=_ticket_records_for(row.employee_email),
+                    prefetched_attendance_records=_attendance_records_for(
+                        row.employee_email
+                    ),
+                )
+            else:
+                result = await scorer.calculate(
+                    employee=emp,
+                    evaluation_run_id=run_id,
+                    year=year,
+                    month=month,
+                    db=db,
+                )
             await db.commit()
         except Exception as exc:
             log.error(
@@ -307,6 +430,8 @@ async def execute_support_bulk_run(
                 year=year,
                 month=month,
                 db=db,
+                col_names=col_names,
+                team_display_name=team_display_name,
             )
             log.info("support_report_generated", path=report_path)
         except Exception as exc:

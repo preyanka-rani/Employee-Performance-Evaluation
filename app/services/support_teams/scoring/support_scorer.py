@@ -53,7 +53,18 @@ class SupportTeamScorer(AbstractScorer):
         year: int,
         month: int,
         db: AsyncSession,
+        *,
+        prefetched_crm_log_records: list | None = None,
+        prefetched_ticket_records: list | None = None,
+        prefetched_attendance_records: list | None = None,
     ) -> dict:
+        """Evaluate one support-team employee.
+
+        When the ``prefetched_*`` arguments are supplied (team-wide batch data
+        pre-fetched before the scoring loop) the LangGraph workflow will skip
+        all MySQL calls and use the supplied records directly, keyed by email.
+        This reduces MySQL load from N×3 queries per run to 3 queries total.
+        """
         log = logger.bind(
             employee_email=employee.email,
             employee_id=employee.employee_id,
@@ -116,6 +127,9 @@ class SupportTeamScorer(AbstractScorer):
                 tl_kpi=tl_kpi,
                 tl_general=tl_general,
                 db=db,
+                prefetched_crm_log_records=prefetched_crm_log_records,
+                prefetched_ticket_records=prefetched_ticket_records,
+                prefetched_attendance_records=prefetched_attendance_records,
             )
         except Exception as exc:
             log.error("support_workflow_failed", error=str(exc))

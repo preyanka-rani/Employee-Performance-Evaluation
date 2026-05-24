@@ -77,8 +77,18 @@ def _default_state(
     tl_support_readiness: float,
     tl_kpi: float,
     tl_general: float,
+    *,
+    crm_log_records: list | None = None,
+    ticket_records: list | None = None,
+    attendance_records: list | None = None,
+    data_prefetched: bool = False,
 ) -> SupportEvalState:
-    """Return a fully-initialised default state."""
+    """Return a fully-initialised default state.
+
+    When *crm_log_records*, *ticket_records*, and *attendance_records* are
+    supplied they are injected directly and *data_prefetched* is set to True
+    so that ``fetch_data_node`` skips all MySQL calls.
+    """
     return SupportEvalState(
         # Inputs
         employee_email=employee_email,
@@ -90,10 +100,11 @@ def _default_state(
         tl_support_readiness=tl_support_readiness,
         tl_kpi=tl_kpi,
         tl_general=tl_general,
-        # Raw data (empty until fetched)
-        crm_log_records=[],
-        ticket_records=[],
-        attendance_records=[],
+        # Raw data — pre-populated if batch-fetched, else empty (fetch_data_node fills)
+        crm_log_records=crm_log_records if crm_log_records is not None else [],
+        ticket_records=ticket_records if ticket_records is not None else [],
+        attendance_records=attendance_records if attendance_records is not None else [],
+        data_prefetched=data_prefetched,
         # Fetch errors
         crm_fetch_error=None,
         tickets_fetch_error=None,
@@ -135,14 +146,30 @@ async def fetch_data_node(state: SupportEvalState) -> dict:
     """
     Fetch CRM log hours, ticket data, and attendance in parallel.
 
-    Three separate MySQL connections are opened concurrently to minimise
-    total wall-clock time.  Each fetch is caught independently so one
+    When ``state["data_prefetched"]`` is True, all three record lists have
+    already been populated by a team-wide batch query in the calling code.
+    In that case this node is a no-op — it returns an empty dict so the
+    existing data in state flows to the next nodes unchanged.
+
+    Otherwise three separate MySQL connections are opened concurrently to
+    minimise wall-clock time.  Each fetch is caught independently so one
     failure does not block the others.
     """
     email = state["employee_email"]
     employee_id = state["employee_id"]
     year = state["year"]
     month = state["month"]
+
+    # ── Short-circuit when data was pre-fetched for the whole team ────────────
+    if state.get("data_prefetched"):
+        logger.info(
+            "support_fetch_data_skipped_prefetched",
+            email=email,
+            crm_records=len(state.get("crm_log_records", [])),
+            ticket_records=len(state.get("ticket_records", [])),
+            attendance_records=len(state.get("attendance_records", [])),
+        )
+        return {}  # data already in state — nothing to update
 
     logger.info(
         "support_fetch_data_start",
@@ -287,12 +314,23 @@ async def compute_tickets_node(state: SupportEvalState) -> dict:
     )
 
     if ticket_row is None:
-        # No tickets found — defaults to zero-ticket scoring
-        total_tickets = 0
-        avg_days = 0.0
-    else:
-        total_tickets = int(ticket_row.get("total_tickets", 0))
-        avg_days = float(ticket_row.get("average_taken_days", 0.0))
+        # No ticket row found for this employee — mirrors reference code's
+        # pandas fillna({'tickets_evaluation_score': 0}) on a LEFT JOIN miss.
+        # Do NOT run the formula; set all ticket scores to 0 directly.
+        logger.info(
+            "support_tickets_no_row_found",
+            email=email,
+        )
+        return {
+            "total_tickets": 0,
+            "average_taken_days": 0.0,
+            "monthly_tickets_score": 0.0,
+            "monthly_ticket_resolved_score": 0.0,
+            "tickets_evaluation_score": 0.0,
+        }
+
+    total_tickets = int(ticket_row.get("total_tickets", 0))
+    avg_days = float(ticket_row.get("average_taken_days", 0.0))
 
     volume_score, speed_score, tickets_eval = compute_tickets_evaluation_score(
         total_tickets, avg_days
@@ -551,6 +589,11 @@ async def run_support_evaluation(
     tl_kpi: float,
     tl_general: float,
     db: AsyncSession,
+    # ── Batch-fetch optimisation ─────────────────────────────────────────────
+    # Pass these to skip MySQL inside the workflow and reuse team-wide data.
+    prefetched_crm_log_records: list | None = None,
+    prefetched_ticket_records: list | None = None,
+    prefetched_attendance_records: list | None = None,
 ) -> SupportEvalState:
     """
     Execute the full support team evaluation workflow for one employee.
@@ -565,10 +608,20 @@ async def run_support_evaluation(
         tl_kpi:              TL mark for KPI Agreement (0-15).
         tl_general:          TL mark for Leadership General Assessment (0-15).
         db:                  Async SQLAlchemy session for persisting results.
+        prefetched_crm_log_records:  Pre-fetched CRM log records for all team
+            members (filtered per email inside workflow nodes).  When supplied,
+            ``fetch_data_node`` skips MySQL entirely.
+        prefetched_ticket_records:   Same, for ticket data.
+        prefetched_attendance_records: Same, for attendance data.
 
     Returns:
         Final SupportEvalState with all computed scores.
     """
+    use_prefetch = (
+        prefetched_crm_log_records is not None
+        or prefetched_ticket_records is not None
+        or prefetched_attendance_records is not None
+    )
     initial_state = _default_state(
         employee_email=employee_email,
         employee_id=employee_id,
@@ -579,6 +632,10 @@ async def run_support_evaluation(
         tl_support_readiness=tl_support_readiness,
         tl_kpi=tl_kpi,
         tl_general=tl_general,
+        crm_log_records=prefetched_crm_log_records,
+        ticket_records=prefetched_ticket_records,
+        attendance_records=prefetched_attendance_records,
+        data_prefetched=use_prefetch,
     )
 
     # Run nodes that don't need db access through the compiled graph
