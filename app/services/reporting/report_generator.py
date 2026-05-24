@@ -161,7 +161,7 @@ async def generate_excel_report(
         60–79 → yellow fill
         < 60  → red fill
 
-    Saves to:  outputs/reports/Final_Report_{team}_{year}_{month:02d}.xlsx
+    Saves to:  outputs/developer/Final_Report_{team}_{year}_{month:02d}.xlsx
     Returns the saved file path as a string.
     """
     import pathlib
@@ -302,7 +302,7 @@ async def generate_excel_report(
             ws.cell(row=summary_row, column=col_idx).font = Font(bold=True)
 
     # ── Save file ─────────────────────────────────────────────────────────────
-    output_dir = pathlib.Path("outputs/reports")
+    output_dir = pathlib.Path("outputs") / "developer"
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"Final_Report_{team}_{year}_{month:02d}.xlsx"
     output_path = output_dir / filename
@@ -356,7 +356,7 @@ async def generate_code_quality_report(
     Color coding (score columns):
         ≥ 80 → green  |  60–79 → yellow  |  < 60 → red  |  skipped → grey
 
-    Saves to:  outputs/reports/CodeQuality_Report_{team}_{year}_{month:02d}.xlsx
+    Saves to:  outputs/developer/CodeQuality_Report_{team}_{year}_{month:02d}.xlsx
     Returns the saved file path.
     """
     import json
@@ -874,7 +874,7 @@ async def generate_code_quality_report(
             ws_det.row_dimensions[dr].height = max(40, remarks_lines * 15)
 
     # ── Save ──────────────────────────────────────────────────────────────────
-    output_dir = pathlib.Path("outputs/reports")
+    output_dir = pathlib.Path("outputs") / "developer"
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"CodeQuality_Report_{team}_{year}_{month:02d}.xlsx"
     output_path = output_dir / filename
