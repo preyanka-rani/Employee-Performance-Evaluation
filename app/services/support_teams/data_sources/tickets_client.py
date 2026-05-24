@@ -85,13 +85,15 @@ class SupportTicketsClient:
         params["end_date"] = f"{end_date.isoformat()} 23:59:59"
 
         # Mirrors tickets_score.sql exactly:
-        # Outer query aggregates per user across all process entries in the month.
-        # Inner query groups by (email, name) per entry window.
+        # UNION ALL of two subqueries:
+        #   1. status_id = 23  (Completed)  — with access_role = 'Employee' filter
+        #   2. status_id = 4               — without access_role filter
+        # Reference: python-docker_v3_others_Imp_support/sql/mysql/tickets_score.sql
         sql = text(f"""
             SELECT
                 user_email,
                 assigned_parson,
-                SUM(tickets)       AS total_tickets,
+                SUM(tickets)                  AS total_tickets,
                 ROUND(AVG(avg_taken_days), 2) AS average_taken_days
             FROM (
                 SELECT
@@ -110,7 +112,34 @@ class SupportTicketsClient:
                 LEFT JOIN users u
                     ON plh.updated_by = u.id
                     AND u.user_status = 'active'
+                    AND u.access_role = 'Employee'
                 WHERE plh.updated_at BETWEEN :start_date AND :end_date
+                  AND plh.process_type = 2
+                  AND plh.status_id = 23
+                  AND u.employee_id IN ({placeholders})
+                GROUP BY u.user_email, assigned_parson
+
+                UNION ALL
+
+                SELECT
+                    u.user_email,
+                    CONCAT_WS(
+                        ' ',
+                        u.user_first_name,
+                        u.user_middle_name,
+                        u.user_last_name
+                    ) AS assigned_parson,
+                    COUNT(plh.tracking_no) AS tickets,
+                    AVG(
+                        IFNULL(DATEDIFF(plh.updated_at, plh.created_at), 0)
+                    ) AS avg_taken_days
+                FROM process_list_hist plh
+                LEFT JOIN users u
+                    ON plh.updated_by = u.id
+                    AND u.user_status = 'active'
+                WHERE plh.updated_at BETWEEN :start_date AND :end_date
+                  AND plh.process_type = 2
+                  AND plh.status_id = 4
                   AND u.employee_id IN ({placeholders})
                 GROUP BY u.user_email, assigned_parson
             ) tm

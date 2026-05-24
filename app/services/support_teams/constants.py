@@ -60,17 +60,19 @@ SUPPORT_TEAM_KEYS: frozenset[str] = frozenset(
 )
 
 # ── CRM Log Hour Normalisation (support teams) ────────────────────────────────
-# Reference: funcational_log_activities.py
-# "লগ আওয়ারকে একটি কাস্টম ট্রান্সফরমেশন ফাংশন (যেমন: >১৬০ হলে ১০০, >১৪০ হলে ৮০)"
+# Reference: funcational_log_activities.py  transform() function
+# Thresholds use strictly-greater-than (>) comparisons.
 LOG_HOUR_TIERS: list[tuple[float, float]] = [
-    (160.0, 100.0),
-    (140.0, 80.0),
-    (120.0, 70.0),
-    (100.0, 60.0),
-    (80.0, 50.0),
-    (60.0, 40.0),
+    (160.0, 100.0),  # > 160 → 100
+    (140.0, 80.0),  # > 140 → 80
+    (130.0, 70.0),  # > 130 → 70
+    (120.0, 60.0),  # > 120 → 60
+    (110.0, 50.0),  # > 110 → 50
+    (80.0, 40.0),  # >  80 → 40
 ]
-LOG_HOUR_FLOOR_SCORE: float = 30.0  # score when hours < lowest tier
+# hours == 0 → 0;  0 < hours <= 80 → 20
+LOG_HOUR_ZERO_SCORE: float = 0.0
+LOG_HOUR_FLOOR_SCORE: float = 20.0  # score for 0 < hours <= 80
 
 # ── Ticket Volume Tiers ───────────────────────────────────────────────────────
 # Reference: tickets_score.sql

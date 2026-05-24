@@ -31,26 +31,34 @@ def normalise_support_log_hours(hours: float) -> float:
     """
     Convert raw log hours into a 0-100 score using support-team specific tiers.
 
-    Reference: perform_crm.sql / funcational_log_activities.py
-    Doc quote: ">১৬০ হলে ১০০, >১৪০ হলে ৮০ ইত্যাদি"
+    Reference: funcational_log_activities.py  transform() function (manual codebase).
 
-    Note: This is intentionally different from developer normalisation
-          which uses >=140→90. Support teams have a stricter tier.
+    Exact thresholds — strictly greater-than (matches the manual code):
+        > 160  → 100
+        > 140  → 80
+        > 130  → 70
+        > 120  → 60
+        > 110  → 50
+        >  80  → 40
+        == 0   → 0
+        else   → 20   (0 < hours <= 80)
     """
-    if hours >= 160.0:
+    if hours > 160:
         return 100.0
-    elif hours >= 140.0:
+    elif hours > 140:
         return 80.0
-    elif hours >= 120.0:
+    elif hours > 130:
         return 70.0
-    elif hours >= 100.0:
+    elif hours > 120:
         return 60.0
-    elif hours >= 80.0:
+    elif hours > 110:
         return 50.0
-    elif hours >= 60.0:
+    elif hours > 80:
         return 40.0
+    elif hours == 0:
+        return 0.0
     else:
-        return 30.0
+        return 20.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +75,7 @@ def compute_crm_log_score(
 
     Args:
         log_hours:      Total raw log hours for the month.
-        sentiment_score: Averaged TextBlob sentiment score 0-100.
+        sentiment_score: Averaged TextBlob  0-100.
 
     Returns:
         (log_hours_score, crm_log_score)
@@ -100,8 +108,10 @@ def compute_monthly_tickets_score(total_tickets: int) -> float:
         return 70.0
     elif total_tickets > 0:
         return 60.0
+    elif total_tickets == 0:
+        return 40.0
     else:
-        return 40.0  # 0 tickets
+        return 50.0  # 0 tickets
 
 
 def compute_ticket_resolution_score(average_taken_days: float) -> float:
