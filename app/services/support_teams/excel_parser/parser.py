@@ -73,12 +73,18 @@ class SupportTLRow:
     general: float  # 0-15
     employee_id: str = ""  # optional – resolved from MySQL by the endpoint if blank
     employee_name: str = ""  # optional – used for Employee upsert
+    team_name: str = ""  # raw team name value from input Excel, if column exists
 
 
 @dataclass
 class SupportTLParseResult:
     rows: list[SupportTLRow] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    col_names: dict[str, str] = field(default_factory=dict)
+    # Maps canonical field → original header string from the uploaded Excel, e.g.
+    # {"support_readiness": "Support Readiness & Issue Handling (0-10)",
+    #  "kpi": "KPI Agreement (0-15)", "general": "Leadership General Assessment (0-15)",
+    #  "team_name": "Team"}
 
 
 # ── Score bounds ──────────────────────────────────────────────────────────────
@@ -174,6 +180,15 @@ _ALIAS_MAP: dict[str, str] = {
     "id": "employee_id",
     "staff_id": "employee_id",
     "personnel_id": "employee_id",
+    # ── team_name (optional) ──────────────────────────────────────────────────
+    "team": "team_name",
+    "team_name": "team_name",
+    "team_names": "team_name",
+    "team_label": "team_name",
+    "department": "team_name",
+    "dept": "team_name",
+    "division": "team_name",
+    "group_name": "team_name",
 }
 
 
@@ -484,6 +499,10 @@ async def parse_support_tl_excel(file_bytes: bytes) -> SupportTLParseResult:
         if emp_name in ("nan", "None"):
             emp_name = ""
 
+        team_name_val = _cell("team_name", "")
+        if team_name_val in ("nan", "None"):
+            team_name_val = ""
+
         rows.append(
             SupportTLRow(
                 employee_email=email,
@@ -492,6 +511,7 @@ async def parse_support_tl_excel(file_bytes: bytes) -> SupportTLParseResult:
                 general=gn,
                 employee_id=emp_id,
                 employee_name=emp_name,
+                team_name=team_name_val,
             )
         )
 
@@ -503,7 +523,7 @@ async def parse_support_tl_excel(file_bytes: bytes) -> SupportTLParseResult:
         valid_rows=len(rows),
         warning_count=len(parse_errors),
     )
-    return SupportTLParseResult(rows=rows, errors=parse_errors)
+    return SupportTLParseResult(rows=rows, errors=parse_errors, col_names=col_map)
     col_index: dict[str, int] = {}
     for idx, cell_value in enumerate(header_row):
         if cell_value is None:
