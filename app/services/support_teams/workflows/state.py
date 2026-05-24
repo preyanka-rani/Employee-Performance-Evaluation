@@ -87,3 +87,9 @@ class SupportEvalState(TypedDict):
     persisted: bool
     persist_error: str | None
     workflow_error: str | None  # fatal error that stopped the workflow
+
+    # ── Batch-fetch optimisation ──────────────────────────────────────────────
+    # When True, crm_log_records / ticket_records / attendance_records have
+    # already been pre-populated from a team-wide batch query.
+    # fetch_data_node will skip all MySQL calls and return immediately.
+    data_prefetched: bool
