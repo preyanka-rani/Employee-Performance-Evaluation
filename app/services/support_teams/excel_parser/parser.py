@@ -129,6 +129,11 @@ _ALIAS_MAP: dict[str, str] = {
     "support_issue_handling": "support_readiness",
     "readiness_and_issue_handling": "support_readiness",
     "issue_readiness": "support_readiness",
+
+    "avg_critical_thinking_score": "support_readiness",
+    "critical_thinking_score": "support_readiness",
+    "critical_thinking": "support_readiness",
+    "support_readiness_score": "support_readiness",
     # ── kpi (0-15) ────────────────────────────────────────────────────────────
     "kpi": "kpi",
     "kpi_15": "kpi",
@@ -147,6 +152,8 @@ _ALIAS_MAP: dict[str, str] = {
     "performance_score": "kpi",
     "target_achievement": "kpi",
     "performance_target": "kpi",
+
+    "performance_agreement_score": "kpi",
     # ── general (0-15) ────────────────────────────────────────────────────────
     "general": "general",
     "general_15": "general",
@@ -167,6 +174,8 @@ _ALIAS_MAP: dict[str, str] = {
     "overall_general": "general",
     "behavioral_assessment": "general",
     "soft_skills": "general",
+
+    "team_lead_assesment_score": "general",
     # ── employee_name (optional) ──────────────────────────────────────────────
     "name": "employee_name",
     "full_name": "employee_name",

@@ -159,8 +159,12 @@ async def execute_support_bulk_run(
     tl_repo = TLAssessmentRepository(db)
 
     for row in tl_rows:
-        # Upsert Employee
-        emp = await emp_repo.get_by_email(row.employee_email)
+        emp = None
+        if row.employee_id:
+            emp = await emp_repo.get_by_employee_id(row.employee_id) 
+        if emp is None:
+            emp = await emp_repo.get_by_email(row.employee_email)
+
         if emp is None:
             emp = await emp_repo.create(
                 Employee(

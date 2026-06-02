@@ -61,7 +61,8 @@ which column corresponds to each of the following canonical fields:
   general           – General leadership / team-lead assessment score (numeric, range 0-15)
   employee_name     – Full name of the employee (optional, text)
   employee_id       – Internal employee ID number (optional, often numeric or alphanumeric)
-
+  support_readiness – Support readiness / issue handling / critical thinking score (numeric, range 0-10)
+  
 Rules:
   - Respond ONLY with a single valid JSON object, no extra text or markdown.
   - Keys   = EXACT column header strings from the input (case-sensitive, as given).
