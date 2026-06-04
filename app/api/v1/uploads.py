@@ -17,10 +17,8 @@ from app.models.scores import TLAssessmentScore
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.repositories.score_repository import TLAssessmentRepository
 from app.schemas.scores import TLAssessmentUploadResponse
-from app.services.data_sources.excel_parser import (
-    ExcelParseError,
-    parse_tl_assessment_excel,
-)
+from app.shared.excel_parser.parser import ExcelParseError
+from app.shared.excel_parser.tl_assessment import parse_tl_assessment_excel
 
 router = APIRouter(prefix="/upload", tags=["uploads"])
 

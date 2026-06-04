@@ -14,14 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.core.logging_config import get_logger
-
-_log = get_logger(__name__)
+from app.orchestrator import run_supervisor
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.evaluation import (
     EvaluationRunRequest,
     EvaluationRunResponse,
     EvaluationStatusResponse,
 )
+from app.shared.excel_parser.parser import ExcelParseError
+
+_log = get_logger(__name__)
 
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 
@@ -138,339 +140,50 @@ async def bulk_run_evaluation(
         6. Generate a formatted Excel report saved to outputs/reports/
         7. Return summary stats + report path
     """
-    from app.models.employee import Employee
     from app.models.evaluation_run import EvaluationRun, EvaluationStatus
-    from app.models.scores import TLAssessmentScore
-    from app.repositories.employee_repository import EmployeeRepository
-    from app.repositories.score_repository import TLAssessmentRepository
-    from app.services.data_sources.excel_parser import ExcelParseError, parse_tl_excel
-    from app.services.reporting.report_generator import (
-        generate_code_quality_report,
-        generate_excel_report,
-    )
-    from app.services.scoring.base import get_scorer, resolve_team_key
+    from app.repositories.evaluation_repository import EvaluationRepository
 
-    # ── 0. Resolve team key and route non-developer teams ─────────────────────
+    # ── 0. Resolve team key and short-circuit on conflicts ───────────────────
+    from app.shared.registry import TeamRegistry
+
     try:
-        team_key = resolve_team_key(team)
+        team_key = TeamRegistry.resolve(team)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
 
-    if team_key != "developer":
-        from app.api.v1.support_evaluations import execute_support_bulk_run
+    log = _log.bind(team=team_key, year=year, month=month)
+    log.info("bulk_run_start", filename=file.filename, size=file.size)
 
-        content = await file.read()
-        return await execute_support_bulk_run(
-            team_key=team_key,
+    # ── 1. Delegate everything to the supervisor graph ──────────────────────
+    content = await file.read()
+    try:
+        summary = await run_supervisor(
+            file_bytes=content,
+            raw_team_input=team,
             year=year,
             month=month,
-            file_bytes=content,
-            filename=file.filename or "",
             db=db,
         )
-
-    # ── Developer flow below ──────────────────────────────────────────────────
-    log = _log.bind(team=team_key, year=year, month=month)
-
-    # ── 1. Parse Excel ────────────────────────────────────────────────────────
-    log.info("bulk_run_start", filename=file.filename, size=file.size)
-    try:
-        content = await file.read()
-        tl_rows = parse_tl_excel(content)
-        log.info("excel_parsed_ok", row_count=len(tl_rows))
-
-        # ── 1b. Resolve missing employee_ids from MySQL ───────────────────────
-        missing_id_emails = [r.email for r in tl_rows if not r.employee_id]
-        if missing_id_emails:
-            from app.services.data_sources.mysql_client import MySQLCRMClient
-
-            crm = MySQLCRMClient()
-            try:
-                resolved = await crm.get_employee_ids_by_emails(missing_id_emails)
-            finally:
-                await crm.close()
-
-            still_missing: list[str] = []
-            for r in tl_rows:
-                if not r.employee_id:
-                    found_id = resolved.get(r.email)
-                    if found_id:
-                        r.employee_id = found_id
-                        log.info(
-                            "employee_id_resolved_from_mysql",
-                            email=r.email,
-                            employee_id=found_id,
-                        )
-                    else:
-                        still_missing.append(r.email)
-                        log.warning(
-                            "employee_id_not_found_in_mysql",
-                            email=r.email,
-                        )
-
-            # Drop rows that still have no employee_id
-            tl_rows = [r for r in tl_rows if r.employee_id]
-            if still_missing:
-                log.error(
-                    "employee_id_lookup_failed",
-                    emails=still_missing,
-                    message="Rows dropped — employee_id not found in MySQL users table",
-                )
-
-        if not tl_rows:
-            log.warning("excel_no_valid_rows_after_id_lookup")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="No valid employee rows after employee_id resolution.",
-            )
-
-        for r in tl_rows:
-            log.debug(
-                "tl_row",
-                employee_id=r.employee_id,
-                email=r.email,
-                name=r.name,
-                tl_ps=r.tl_problem_solving,
-                tl_kpi=r.tl_kpi,
-                tl_general=r.tl_general,
-                tl_total=r.tl_total,
-            )
+    except ValueError as exc:
+        # Team key not found / parse fatal — surface as 400
+        log.error("bulk_run_invalid_request", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except ExcelParseError as exc:
-        log.error("excel_parse_error", errors=exc.errors)
+        log.error("bulk_run_parse_error", errors=exc.errors)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"message": "Excel parsing failed", "errors": exc.errors},
         ) from exc
-    except ValueError as exc:
-        log.error("excel_value_error", error=str(exc))
+
+    if not summary.get("processed_count") and summary.get("status") == "failed":
+        # All rows failed — return 422 so the client knows
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
-    if not tl_rows:
-        log.warning("excel_no_valid_rows")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Excel file contains no valid employee rows.",
+            detail=summary,
         )
 
-    # ── 2. Create EvaluationRun ───────────────────────────────────────────────
-    eval_repo = EvaluationRepository(db)
-
-    run = await eval_repo.create(
-        EvaluationRun(
-            year=year,
-            month=month,
-            team=team_key,
-            status=EvaluationStatus.RUNNING,
-            triggered_by="api",
-        )
-    )
-    await db.commit()
-    await db.refresh(run)
-    run_id: int = run.id
-    log = log.bind(run_id=run_id)
-    log.info("evaluation_run_created", employee_count=len(tl_rows))
-
-    # ── 3. Upsert employees and TL assessment scores ──────────────────────────
-    log.info("upserting_employees_and_tl_scores")
-    emp_repo = EmployeeRepository(db)
-    tl_repo = TLAssessmentRepository(db)
-
-    for tl_row in tl_rows:
-        # Upsert Employee
-        emp = await emp_repo.get_by_employee_id(tl_row.employee_id)
-        if emp is None:
-            emp = await emp_repo.create(
-                Employee(
-                    employee_id=tl_row.employee_id,
-                    name=tl_row.name,
-                    email=tl_row.email,
-                    team=team_key,
-                    gitlab_username=tl_row.gitlab_username,
-                    is_active=True,
-                )
-            )
-        else:
-            # Update mutable fields in place
-            emp.name = tl_row.name
-            emp.email = tl_row.email
-            emp.team = team_key
-            if tl_row.gitlab_username:
-                emp.gitlab_username = tl_row.gitlab_username
-
-        # Upsert TLAssessmentScore (check before insert to avoid duplicate)
-        existing_tl = await tl_repo.get_by_run_and_email(
-            run_id=run_id, email=tl_row.email
-        )
-        if existing_tl is None:
-            await tl_repo.create(
-                TLAssessmentScore(
-                    evaluation_run_id=run_id,
-                    employee_email=tl_row.email,
-                    year=year,
-                    month=month,
-                    problem_solving=tl_row.tl_problem_solving,
-                    kpi=tl_row.tl_kpi,
-                    general=tl_row.tl_general,
-                    total=tl_row.tl_total,
-                    uploaded_by="api",
-                )
-            )
-            log.debug("tl_score_saved", email=tl_row.email, total=tl_row.tl_total)
-        else:
-            existing_tl.problem_solving = tl_row.tl_problem_solving
-            existing_tl.kpi = tl_row.tl_kpi
-            existing_tl.general = tl_row.tl_general
-            existing_tl.total = tl_row.tl_total
-
-    await db.commit()
-
-    # ── 4. Run scorer per employee ────────────────────────────────────────────
-    log.info("starting_scorer", team=team_key)
-    try:
-        scorer = get_scorer(team_key)
-        log.info("scorer_loaded", scorer=type(scorer).__name__)
-    except ValueError as exc:
-        log.error("scorer_not_found", team=team, error=str(exc))
-        await eval_repo.mark_failed(run, str(exc))
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-
-    processed_count = 0
-    failed_count = 0
-    emails: list[str] = []
-    scoring_errors: list[dict] = []
-
-    for tl_row in tl_rows:
-        emp = await emp_repo.get_by_employee_id(tl_row.employee_id)
-        if emp is None:
-            failed_count += 1
-            scoring_errors.append(
-                {
-                    "email": tl_row.email,
-                    "error": "Employee record not found after upsert",
-                }
-            )
-            continue
-
-        log.info("scoring_employee", employee_id=tl_row.employee_id, email=tl_row.email)
-        try:
-            result = await scorer.calculate(
-                employee=emp,
-                evaluation_run_id=run_id,
-                year=year,
-                month=month,
-                db=db,
-            )
-            await db.commit()
-
-            if result.get("error"):
-                log.warning(
-                    "scorer_returned_error",
-                    email=tl_row.email,
-                    error=result["error"],
-                )
-                failed_count += 1
-                scoring_errors.append({"email": tl_row.email, "error": result["error"]})
-            else:
-                processed_count += 1
-                emails.append(tl_row.email)
-                log.info(
-                    "employee_scored",
-                    email=tl_row.email,
-                    final_score=result.get("final_score"),
-                    segment_a=result.get("segment_a_marks"),
-                    segment_b=result.get("segment_b_marks"),
-                    base_total=result.get("base_total"),
-                    reward=result.get("reward_score"),
-                )
-
-        except Exception as exc:
-            log.exception("scoring_exception", email=tl_row.email, error=str(exc))
-            await db.rollback()
-            failed_count += 1
-            scoring_errors.append({"email": tl_row.email, "error": str(exc)})
-
-    # ── 5. Mark run complete ──────────────────────────────────────────────────
-    partial = failed_count > 0
-    log.info(
-        "scoring_complete",
-        processed=processed_count,
-        failed=failed_count,
-        partial=partial,
-    )
-    if processed_count == 0:
-        await eval_repo.mark_failed(run, f"All {len(tl_rows)} employees failed scoring")
-    else:
-        await eval_repo.mark_completed(run, partial=partial)
-    await db.commit()
-
-    if processed_count == 0:
-        return {
-            "status": "failed",
-            "run_id": run_id,
-            "processed_count": processed_count,
-            "failed_count": failed_count,
-            "errors": scoring_errors,
-            "report_path": None,
-        }
-
-    # ── 6. Generate Excel report ──────────────────────────────────────────────
-    report_path: str | None = None
-    log.info("generating_excel_report", emails=emails)
-    try:
-        report_path = await generate_excel_report(
-            run_id=run_id,
-            emails=emails,
-            team=team_key,
-            year=year,
-            month=month,
-            db=db,
-        )
-        log.info("excel_report_saved", path=report_path)
-    except Exception as exc:
-        log.exception("report_generation_failed", run_id=run_id, error=str(exc))
-        report_path = None
-        scoring_errors.append({"email": "report_generation", "error": str(exc)})
-
-    # ── 7. Generate Code Quality detail report ────────────────────────────────
-    cq_report_path: str | None = None
-    if team_key == "developer":
-        log.info("generating_code_quality_report", emails=emails)
-        try:
-            cq_report_path = await generate_code_quality_report(
-                run_id=run_id,
-                emails=emails,
-                team=team_key,
-                year=year,
-                month=month,
-                db=db,
-            )
-            log.info("cq_report_saved", path=cq_report_path)
-        except Exception as exc:
-            log.exception("cq_report_generation_failed", run_id=run_id, error=str(exc))
-            cq_report_path = None
-            scoring_errors.append({"email": "cq_report_generation", "error": str(exc)})
-
-    # ── 8. Return summary ─────────────────────────────────────────────────────
-    summary = {
-        "status": "partial" if partial else "success",
-        "run_id": run_id,
-        "team": team_key,
-        "year": year,
-        "month": month,
-        "processed_count": processed_count,
-        "failed_count": failed_count,
-        "report_path": report_path,
-        "cq_report_path": cq_report_path,
-        "errors": scoring_errors if scoring_errors else [],
-    }
-    log.info("bulk_run_complete", **{k: v for k, v in summary.items() if k != "errors"})
     return summary
