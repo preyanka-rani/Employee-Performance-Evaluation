@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 def _build_teams() -> dict[str, type["TeamContract"]]:
     """Build the TEAMS dict.  Called once at module import."""
+    from app.teams.cirt_infra.team import CIRTInfraTeam
     from app.teams.developer.team import DeveloperTeam
     from app.teams.support.team import SupportTeam
 
@@ -47,6 +48,8 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
         "tech_support": SupportTeam,
         # Generic alias for any "support" mention
         "support": SupportTeam,
+        # ── CIRT & Infra team (single team) ─────────────────────────────────
+        "cirt_infra": CIRTInfraTeam,
         # ── To add a new team in the future ────────────────────────────────
         # from app.teams.finance.team import FinanceTeam
         # "finance": FinanceTeam,
@@ -122,6 +125,10 @@ class TeamRegistry:
             ("developer", "developer"),
             ("development", "developer"),
             ("dev", "developer"),
+            ("cirt_infra_team", "cirt_infra"),
+            ("cirt_infra", "cirt_infra"),
+            ("cirt", "cirt_infra"),
+            ("infra", "cirt_infra"),
             ("support", "support"),  # most generic — last
         ]
         for pattern, key in fuzzy_order:

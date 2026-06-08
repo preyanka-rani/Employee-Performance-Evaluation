@@ -86,10 +86,22 @@ class TLUpserter:
             emp.team = team_key
             if row.employee_id and emp.employee_id != row.employee_id:
                 emp.employee_id = row.employee_id
-            if row.employee_name and (not emp.name or emp.name == emp.email):
+            if row.employee_name:
                 emp.name = row.employee_name
             if row.gitlab_username:
                 emp.gitlab_username = row.gitlab_username
+            # Keep Employee.email in sync with the canonical email from the
+            # uploaded Excel. A prior run (or a legacy notebook) may have
+            # stored a placeholder email such as ``emp_<id>@ba-systems.com``;
+            # if we don't reconcile, every downstream score table — and the
+            # report query — ends up using the placeholder, breaking the
+            # parity join on ``employee_email``.
+            if (
+                row.employee_email
+                and emp.email
+                and emp.email.lower() != row.employee_email.lower()
+            ):
+                emp.email = row.employee_email.lower()
 
         # Upsert TLAssessmentScore
         if use_support_readiness:

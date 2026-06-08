@@ -27,12 +27,14 @@ TEAM_TO_ROUTE_KEY: dict[str, str] = {
     "production": "support",
     "tech_support": "support",
     "support": "support",
+    "cirt_infra": "cirt_infra",
 }
 
 # ── Layer 2: routing key → worker node name (LangGraph path map) ──────────────
 PATH_MAP: dict[str, str] = {
     "developer": "score_developer",
     "support": "score_support",
+    "cirt_infra": "score_cirt_infra",
 }
 
 
