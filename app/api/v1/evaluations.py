@@ -281,8 +281,15 @@ async def bulk_run_evaluation(
     tl_repo = TLAssessmentRepository(db)
 
     for tl_row in tl_rows:
-        # Upsert Employee
+        # Upsert Employee: Check by employee_id first, then fallback to email to avoid UNIQUE constraints
         emp = await emp_repo.get_by_employee_id(tl_row.employee_id)
+        if emp is None:
+            # Fallback check by email to completely ensure no UNIQUE constraint failure
+            from sqlalchemy import select
+            stmt = select(Employee).where(Employee.email == tl_row.email)
+            result = await db.execute(stmt)
+            emp = result.scalar_one_or_none()
+
         if emp is None:
             emp = await emp_repo.create(
                 Employee(
@@ -295,7 +302,8 @@ async def bulk_run_evaluation(
                 )
             )
         else:
-            # Update mutable fields in place
+            # Update mutable fields in place safely
+            emp.employee_id = tl_row.employee_id
             emp.name = tl_row.name
             emp.email = tl_row.email
             emp.team = team_key
