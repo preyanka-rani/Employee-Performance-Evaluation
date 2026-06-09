@@ -104,7 +104,6 @@ _ALIAS_MAP: dict[str, str] = {
     "id": "employee_id",
     "staff_id": "employee_id",
     "personnel_id": "employee_id",
-    "sl": "employee_id",
     # ── problem_solving (developer 0-10) ─────────────────────────────────────
     "problem_solving": "problem_solving",
     "tl_problem_solving": "problem_solving",

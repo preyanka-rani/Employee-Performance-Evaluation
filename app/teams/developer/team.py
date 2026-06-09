@@ -218,13 +218,7 @@ class DeveloperTeam(TeamContract):
                 employee_email=employee.email,
                 score=state["sentiment_avg"],
                 average_polarity=state["avg_polarity"],
-                total_logs_analyzed=len(
-                    [
-                        d
-                        for d in state.get("crm_description_records", [])
-                        if str(d.get("employee_id", "")) == employee.employee_id
-                    ]
-                ),
+                total_logs_analyzed=len(state.get("crm_description_records", [])),
                 year=year,
                 month=month,
             )

@@ -368,19 +368,17 @@ async def compute_segment_a_node(state: DeveloperWorkerState) -> dict:
     """
     log = logger.bind(employee_email=state["employee_email"])
 
-    # Sum hours for this employee (filter by exact employee_id match)
+    # Sum hours (records are already filtered by employee_id in fetch_crm_node)
     total_hours = sum(
         float(row.get("total_hours", 0))
         for row in state["crm_log_records"]
-        if str(row.get("employee_id", "")) == state["employee_id"]
     )
     work_log_score = normalise_work_hours(total_hours)
 
-    # Sentiment from descriptions
+    # Sentiment from descriptions (already filtered by employee_id)
     desc_texts = [
         str(row.get("description", ""))
         for row in state["crm_description_records"]
-        if str(row.get("employee_id", "")) == state["employee_id"]
     ]
     sentiment_avg, avg_polarity = compute_employee_sentiment_score(desc_texts)
 
@@ -418,14 +416,7 @@ async def compute_segment_b_node(state: DeveloperWorkerState) -> dict:
     """
     log = logger.bind(employee_email=state["employee_email"])
 
-    att_row = next(
-        (
-            r
-            for r in state["attendance_records"]
-            if str(r.get("employee_id", "")) == state["employee_id"]
-        ),
-        None,
-    )
+    att_row = next(iter(state["attendance_records"]), None)
 
     if att_row:
         attendance_score = float(att_row.get("attendance_score", 60.0))
