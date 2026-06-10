@@ -10,6 +10,7 @@ Output paths:
 The Final Report includes a ``summary_grade`` sheet with:
   - Renamed columns per SQA naming conventions
   - Grade calculation (88-100=A, 84-87=B, 75-83=C, 0-74=D)
+  - Color-coded grades and exact team name matching the input Excel.
 """
 
 from __future__ import annotations
@@ -20,9 +21,11 @@ import openpyxl
 import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging_config import get_logger
+from app.models.employee import Employee
 from app.repositories.score_repository import DeveloperFinalScoreRepository
 from app.services.reporting import report_generator
 
@@ -85,6 +88,11 @@ async def _generate_sqa_final_report(
     dev_repo = DeveloperFinalScoreRepository(db)
     scores = await dev_repo.get_by_run_id(run_id=run_id, emails=emails)
 
+    # ── Fetch Exact Team Names from Database ──
+    result = await db.execute(select(Employee).where(Employee.email.in_(emails)))
+    employees = result.scalars().all()
+    team_map = {emp.email: emp.team for emp in employees}
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = f"sqa {year}-{month:02d}"
@@ -97,10 +105,12 @@ async def _generate_sqa_final_report(
     yellow_fill = PatternFill("solid", fgColor="FFEB9C")
     red_fill = PatternFill("solid", fgColor="FFC7CE")
 
+    # ── Updated Headers: Added 'Team' Column ──
     headers = [
         "Employee ID",
         "Name",
         "Email",
+        "Team",  
         "Component 1 Score (0-100)",
         "  Code Quality (30%)",
         "  Resolution Rate % (35%)",
@@ -136,6 +146,7 @@ async def _generate_sqa_final_report(
             s.employee_id,
             s.employee_name,
             s.employee_email,
+            team_map.get(s.employee_email, "sqa"),  # Dynamic Team Name inserted here
             round(s.component1_score, 2),
             round(s.code_quality_score, 2),
             round(s.resolution_rate, 2),
@@ -166,8 +177,9 @@ async def _generate_sqa_final_report(
         else:
             final_cell.fill = red_fill
 
+    # Adjusted column widths to account for the new Team column
     column_widths = [
-        14, 22, 30, 24, 22, 24, 22, 22, 22, 18, 22, 22, 24, 22, 24, 14, 18, 14, 22, 22, 20, 18
+        14, 22, 30, 20, 24, 22, 24, 22, 22, 22, 18, 22, 22, 24, 22, 24, 14, 18, 14, 22, 22, 20, 18
     ]
     for col_idx, width in enumerate(column_widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
@@ -185,27 +197,21 @@ async def _generate_sqa_final_report(
     output_path = output_dir / filename
     wb.save(str(output_path))
 
-    # ── Append summary_grade sheet ──────────────────────────────────────────
+    # ── Append Formatting-rich summary_grade sheet ────────────────────────
     try:
         df = pd.read_excel(output_path, sheet_name=0)
 
         summary_df = pd.DataFrame()
         summary_df["emp_email"] = df.get("Email", "")
         summary_df["emp_name"] = df.get("Name", "")
-        summary_df["team_name"] = "sqa"
-        summary_df["avg_functional_job_performance_30"] = df.get(
-            "Segment A Marks (0-30)", 0.0
-        )
-        summary_df["avg_office_discipline_10"] = (
-            df.get("Attendance Score (0-100)", 0.0) / 10.0
-        )
-        summary_df["avg_critical_thinking_and_problem_solving_10"] = df.get(
-            "TL Problem Solving (0-10)", 0.0
-        )
-        summary_df["avg_monthly_performance_agreement_15"] = df.get(
-            "TL KPI (0-15)", 0.0
-        )
+        summary_df["team_name"] = df.get("Team", "")  # Fetches exact team name
+        
+        summary_df["avg_functional_job_performance_30"] = df.get("Segment A Marks (0-30)", 0.0)
+        summary_df["avg_office_discipline_10"] = df.get("Attendance Score (0-100)", 0.0) / 10.0
+        summary_df["avg_critical_thinking_and_problem_solving_10"] = df.get("TL Problem Solving (0-10)", 0.0)
+        summary_df["avg_monthly_performance_agreement_15"] = df.get("TL KPI (0-15)", 0.0)
         summary_df["avg_team_leader_assessment_15"] = df.get("TL General (0-15)", 0.0)
+        
         summary_df["avg_total_scores"] = (
             summary_df["avg_functional_job_performance_30"]
             + summary_df["avg_office_discipline_10"]
@@ -214,9 +220,8 @@ async def _generate_sqa_final_report(
             + summary_df["avg_team_leader_assessment_15"]
         )
         
-        # Directly grab the final score rather than recalculating to avoid rounding diffs
+        summary_df["reword_score_5"] = 0.0  # Added to match exact developer column structure
         summary_df["finalize_score"] = df.get("Final Score", 0.0) 
-        
         summary_df["score_percentage"] = (summary_df["finalize_score"] / 100.0).round(4)
         summary_df["Avg_eva_grade"] = summary_df["finalize_score"].apply(_get_sqa_grade)
 
@@ -228,13 +233,10 @@ async def _generate_sqa_final_report(
             workbook = writer.book
             worksheet = writer.sheets["summary_grade"]
 
-            s_header_fill = PatternFill(
-                start_color="1F4E78", end_color="1F4E78", fill_type="solid"
-            )
+            # Define Styles
+            s_header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             s_header_font = Font(color="FFFFFF", bold=True)
-            center_align = Alignment(
-                horizontal="center", vertical="center", wrap_text=True
-            )
+            center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
             left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
             thin_border = Border(
                 left=Side(style="thin", color="BFBFBF"),
@@ -243,29 +245,55 @@ async def _generate_sqa_final_report(
                 bottom=Side(style="thin", color="BFBFBF"),
             )
 
+            # Grade Colors Map
+            grade_colors = {
+                "A": PatternFill("solid", fgColor="C6EFCE"),  # Green
+                "B": PatternFill("solid", fgColor="B4C6E7"),  # Light Blue
+                "C": PatternFill("solid", fgColor="FFEB9C"),  # Yellow
+                "D": PatternFill("solid", fgColor="FFC7CE"),  # Red
+            }
+
+            # Apply Styles to Headers
             for col_num, cell in enumerate(worksheet[1], 1):
                 cell.fill = s_header_fill
                 cell.font = s_header_font
                 cell.alignment = center_align
                 cell.border = thin_border
-                col_letter = get_column_letter(col_num)
-                header_length = len(str(cell.value))
-                worksheet.column_dimensions[col_letter].width = max(
-                    header_length + 2, 12
-                )
 
+            # Find the index of the "Avg_eva_grade" column to apply color
+            grade_col_idx = list(summary_df.columns).index("Avg_eva_grade")
+
+            # Apply Styles to Data Rows and Adjust Row Heights
             for row in worksheet.iter_rows(
                 min_row=2,
                 max_row=worksheet.max_row,
                 min_col=1,
                 max_col=worksheet.max_column,
             ):
+                worksheet.row_dimensions[row[0].row].height = 20  # Set standard row height
+                
                 for idx, cell in enumerate(row):
                     cell.border = thin_border
-                    if idx in [0, 1, 2]:
+                    
+                    if idx in [0, 1, 2]:  # Email, Name, Team Name
                         cell.alignment = left_align
                     else:
                         cell.alignment = center_align
+
+                    # Apply Color to the Grade Column
+                    if idx == grade_col_idx:
+                        grade_val = str(cell.value)
+                        if grade_val in grade_colors:
+                            cell.fill = grade_colors[grade_val]
+
+            # Better Column Auto-fit (based on max string length in each column)
+            for col_idx in range(1, worksheet.max_column + 1):
+                col_letter = get_column_letter(col_idx)
+                max_len = 0
+                for cell in worksheet[col_letter]:
+                    if cell.value:
+                        max_len = max(max_len, len(str(cell.value)))
+                worksheet.column_dimensions[col_letter].width = max(max_len + 2, 12)
 
         log.info("summary_grade_sheet_added_with_formatting", path=output_path)
 
