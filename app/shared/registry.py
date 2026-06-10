@@ -36,6 +36,7 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
     """Build the TEAMS dict.  Called once at module import."""
     from app.teams.cirt_infra.team import CIRTInfraTeam
     from app.teams.developer.team import DeveloperTeam
+    from app.teams.sqa.team import SQATeam
     from app.teams.support.team import SupportTeam
 
     return {
@@ -50,6 +51,8 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
         "support": SupportTeam,
         # ── CIRT & Infra team (single team) ─────────────────────────────────
         "cirt_infra": CIRTInfraTeam,
+        # ── SQA team ─────────────────────────────────────────────────────────
+        "sqa": SQATeam,
         # ── To add a new team in the future ────────────────────────────────
         # from app.teams.finance.team import FinanceTeam
         # "finance": FinanceTeam,

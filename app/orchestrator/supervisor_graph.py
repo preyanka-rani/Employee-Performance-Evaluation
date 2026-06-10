@@ -17,9 +17,10 @@ Topology
     pre_fetch_bulk
       ↓
     [add_conditional_edges]  → score_developer   (team_key == "developer")
-                               → score_support    (any support sub-team)
-                               → score_cirt_infra (team_key == "cirt_infra")
-                                       ↓               ↓               ↓
+                                → score_support    (any support sub-team)
+                                → score_cirt_infra (team_key == "cirt_infra")
+                                → score_sqa        (team_key == "sqa")
+                                        ↓               ↓               ↓               ↓
     [converge]                    generate_report
       ↓
     finalise_run
@@ -49,6 +50,7 @@ from app.orchestrator.nodes import (
     resolve_employee_ids_node,
     score_cirt_infra_node,
     score_developer_node,
+    score_sqa_node,
     score_support_node,
     upsert_employees_and_tl_node,
 )
@@ -80,6 +82,7 @@ def build_supervisor_graph() -> Any:
     builder.add_node("score_developer", score_developer_node)
     builder.add_node("score_support", score_support_node)
     builder.add_node("score_cirt_infra", score_cirt_infra_node)
+    builder.add_node("score_sqa", score_sqa_node)
 
     # ── Convergent back-half ─────────────────────────────────────────────
     builder.add_node("generate_report", generate_report_node)
@@ -103,6 +106,7 @@ def build_supervisor_graph() -> Any:
     builder.add_edge("score_developer", "generate_report")
     builder.add_edge("score_support", "generate_report")
     builder.add_edge("score_cirt_infra", "generate_report")
+    builder.add_edge("score_sqa", "generate_report")
 
     builder.add_edge("generate_report", "finalise_run")
     builder.add_edge("finalise_run", "build_response")

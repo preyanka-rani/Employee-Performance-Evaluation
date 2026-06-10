@@ -299,6 +299,11 @@ async def score_cirt_infra_node(state: OrchestratorState) -> dict[str, Any]:
     return await _score_team_node(state, team_key="cirt_infra")
 
 
+async def score_sqa_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the SQATeam worker."""
+    return await _score_team_node(state, team_key=state["team_key"])
+
+
 # ── Shared scorer loop ────────────────────────────────────────────────────────
 
 

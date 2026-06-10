@@ -302,7 +302,7 @@ async def generate_excel_report(
             ws.cell(row=summary_row, column=col_idx).font = Font(bold=True)
 
     # ── Save file ─────────────────────────────────────────────────────────────
-    output_dir = pathlib.Path("outputs") / "developer"
+    output_dir = pathlib.Path("outputs") / team
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"Final_Report_{team}_{year}_{month:02d}.xlsx"
     output_path = output_dir / filename
@@ -874,7 +874,7 @@ async def generate_code_quality_report(
             ws_det.row_dimensions[dr].height = max(40, remarks_lines * 15)
 
     # ── Save ──────────────────────────────────────────────────────────────────
-    output_dir = pathlib.Path("outputs") / "developer"
+    output_dir = pathlib.Path("outputs") / team
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"CodeQuality_Report_{team}_{year}_{month:02d}.xlsx"
     output_path = output_dir / filename
