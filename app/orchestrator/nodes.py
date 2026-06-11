@@ -213,7 +213,7 @@ async def upsert_employees_and_tl_node(
     log.info("evaluation_run_created", employee_count=len(rows))
 
     # ── Upsert employees + TL scores ─────────────────────────────────────
-    is_support = team_key in ("impl_its", "onsite_support", "production", "tech_support", "support", "cirt_infra")
+    is_support = team_key in ("impl_its", "onsite_support", "production", "tech_support", "support", "cirt_infra", "application")
     from app.shared.persistence.tl_upserter import TLUpserter
 
     upserter = TLUpserter(db)
@@ -297,6 +297,11 @@ async def score_support_node(state: OrchestratorState) -> dict[str, Any]:
 async def score_cirt_infra_node(state: OrchestratorState) -> dict[str, Any]:
     """Score every employee using the CIRTInfraTeam worker."""
     return await _score_team_node(state, team_key="cirt_infra")
+
+
+async def score_application_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the ApplicationTeam worker."""
+    return await _score_team_node(state, team_key="application")
 
 
 async def score_sqa_node(state: OrchestratorState) -> dict[str, Any]:

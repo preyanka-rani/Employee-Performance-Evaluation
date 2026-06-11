@@ -48,6 +48,7 @@ from app.orchestrator.nodes import (
     parse_excel_node,
     pre_fetch_bulk_node,
     resolve_employee_ids_node,
+    score_application_node,
     score_cirt_infra_node,
     score_developer_node,
     score_sqa_node,
@@ -82,6 +83,7 @@ def build_supervisor_graph() -> Any:
     builder.add_node("score_developer", score_developer_node)
     builder.add_node("score_support", score_support_node)
     builder.add_node("score_cirt_infra", score_cirt_infra_node)
+    builder.add_node("score_application", score_application_node)
     builder.add_node("score_sqa", score_sqa_node)
 
     # ── Convergent back-half ─────────────────────────────────────────────
@@ -106,6 +108,7 @@ def build_supervisor_graph() -> Any:
     builder.add_edge("score_developer", "generate_report")
     builder.add_edge("score_support", "generate_report")
     builder.add_edge("score_cirt_infra", "generate_report")
+    builder.add_edge("score_application", "generate_report")
     builder.add_edge("score_sqa", "generate_report")
 
     builder.add_edge("generate_report", "finalise_run")
