@@ -31,6 +31,7 @@ TEAM_TO_ROUTE_KEY: dict[str, str] = {
     "cirt_infra": "cirt_infra",
     "application": "application",
     "sqa": "sqa",
+    "hajj_helpdesk": "hajj_helpdesk",
 }
 
 # ── Layer 2: routing key → worker node name (LangGraph path map) ──────────────
@@ -41,6 +42,7 @@ PATH_MAP: dict[str, str] = {
     "cirt_infra": "score_cirt_infra",
     "application": "score_application",
     "sqa": "score_sqa",
+    "hajj_helpdesk": "score_hajj_helpdesk",
 }
 
 

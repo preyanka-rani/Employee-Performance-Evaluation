@@ -66,6 +66,8 @@ TEAM_SCHEMAS: dict[str, frozenset[str]] = {
     "cirt_infra": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
     # GSD — same support-style contract (support_readiness column)
     "gsd": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    # Hajj Helpdesk — same support-style contract (support_readiness column)
+    "hajj_helpdesk": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
 }
 
 
