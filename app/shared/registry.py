@@ -37,6 +37,7 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
     from app.teams.application.team import ApplicationTeam
     from app.teams.cirt_infra.team import CIRTInfraTeam
     from app.teams.developer.team import DeveloperTeam
+    from app.teams.gsd.team import GSDTeam
     from app.teams.sqa.team import SQATeam
     from app.teams.support.team import SupportTeam
 
@@ -52,6 +53,8 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
         "support": SupportTeam,
         # ── Application team (single team) ──────────────────────────────────
         "application": ApplicationTeam,
+        # ── GSD team (single team) ─────────────────────────────────────────
+        "gsd": GSDTeam,
         # ── CIRT & Infra team (single team) ─────────────────────────────────
         "cirt_infra": CIRTInfraTeam,
         # ── SQA team ─────────────────────────────────────────────────────────
@@ -131,6 +134,8 @@ class TeamRegistry:
             ("developer", "developer"),
             ("development", "developer"),
             ("dev", "developer"),
+            ("gsd_team", "gsd"),
+            ("gsd", "gsd"),
             ("cirt_infra_team", "cirt_infra"),
             ("cirt_infra", "cirt_infra"),
             ("cirt", "cirt_infra"),

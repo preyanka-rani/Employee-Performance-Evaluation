@@ -51,6 +51,7 @@ from app.orchestrator.nodes import (
     score_application_node,
     score_cirt_infra_node,
     score_developer_node,
+    score_gsd_node,
     score_sqa_node,
     score_support_node,
     upsert_employees_and_tl_node,
@@ -82,6 +83,7 @@ def build_supervisor_graph() -> Any:
     # ── Worker fan-out (routed via add_conditional_edges) ────────────────
     builder.add_node("score_developer", score_developer_node)
     builder.add_node("score_support", score_support_node)
+    builder.add_node("score_gsd", score_gsd_node)
     builder.add_node("score_cirt_infra", score_cirt_infra_node)
     builder.add_node("score_application", score_application_node)
     builder.add_node("score_sqa", score_sqa_node)
@@ -107,6 +109,7 @@ def build_supervisor_graph() -> Any:
     # All workers converge on generate_report
     builder.add_edge("score_developer", "generate_report")
     builder.add_edge("score_support", "generate_report")
+    builder.add_edge("score_gsd", "generate_report")
     builder.add_edge("score_cirt_infra", "generate_report")
     builder.add_edge("score_application", "generate_report")
     builder.add_edge("score_sqa", "generate_report")

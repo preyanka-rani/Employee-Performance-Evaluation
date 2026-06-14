@@ -27,6 +27,7 @@ TEAM_TO_ROUTE_KEY: dict[str, str] = {
     "production": "support",
     "tech_support": "support",
     "support": "support",
+    "gsd": "gsd",
     "cirt_infra": "cirt_infra",
     "application": "application",
     "sqa": "sqa",
@@ -36,6 +37,7 @@ TEAM_TO_ROUTE_KEY: dict[str, str] = {
 PATH_MAP: dict[str, str] = {
     "developer": "score_developer",
     "support": "score_support",
+    "gsd": "score_gsd",
     "cirt_infra": "score_cirt_infra",
     "application": "score_application",
     "sqa": "score_sqa",
