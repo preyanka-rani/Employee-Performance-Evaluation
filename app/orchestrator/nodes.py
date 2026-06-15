@@ -213,7 +213,7 @@ async def upsert_employees_and_tl_node(
     log.info("evaluation_run_created", employee_count=len(rows))
 
     # ── Upsert employees + TL scores ─────────────────────────────────────
-    is_support = team_key in ("impl_its", "onsite_support", "production", "tech_support", "support", "gsd", "cirt_infra", "application", "hajj_helpdesk")
+    is_support = team_key in ("impl_its", "onsite_support", "production", "tech_support", "support", "gsd", "cirt_infra", "application", "hajj_helpdesk", "supply_chain")
     from app.shared.persistence.tl_upserter import TLUpserter
 
     upserter = TLUpserter(db)
@@ -327,6 +327,11 @@ async def score_sqa_node(state: OrchestratorState) -> dict[str, Any]:
 async def score_hajj_helpdesk_node(state: OrchestratorState) -> dict[str, Any]:
     """Score every employee using the HajjHelpdeskTeam worker."""
     return await _score_team_node(state, team_key="hajj_helpdesk")
+
+
+async def score_supply_chain_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the SupplyChainTeam worker."""
+    return await _score_team_node(state, team_key="supply_chain")
 
 
 # ── Shared scorer loop ────────────────────────────────────────────────────────

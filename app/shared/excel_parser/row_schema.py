@@ -68,6 +68,8 @@ TEAM_SCHEMAS: dict[str, frozenset[str]] = {
     "gsd": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
     # Hajj Helpdesk — same support-style contract (support_readiness column)
     "hajj_helpdesk": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    # Supply Chain — CRM log-based (uses problem_solving field for Critical Thinking)
+    "supply_chain": frozenset({"employee_email", "problem_solving", "kpi", "general"}),
 }
 
 
