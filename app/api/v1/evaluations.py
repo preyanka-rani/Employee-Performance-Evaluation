@@ -118,7 +118,7 @@ async def bulk_run_evaluation(
         description=(
             "Team name — any human-readable form accepted for any team. "
             "Examples: 'developer', 'Tech Support', 'Implementation & ITS', "
-            "'tech_support', 'impl_its', 'onsite_support', 'production','cirt_infra','sqa', 'hajj_helpdesk', 'supply_chain'."
+            "'tech_support', 'impl_its', 'onsite_support', 'production','cirt_infra','sqa', 'hajj_helpdesk', 'supply_chain','finance','hr'."
         ),
     ),
     month: int = Form(..., ge=1, le=12, description="Evaluation month (1-12)"),
