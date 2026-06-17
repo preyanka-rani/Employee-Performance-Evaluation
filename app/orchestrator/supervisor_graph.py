@@ -54,6 +54,7 @@ from app.orchestrator.nodes import (
     score_finance_node,
     score_gsd_node,
     score_hajj_helpdesk_node,
+    score_hr_node,
     score_sqa_node,
     score_supply_chain_node,
     score_support_node,
@@ -93,6 +94,7 @@ def build_supervisor_graph() -> Any:
     builder.add_node("score_hajj_helpdesk", score_hajj_helpdesk_node)
     builder.add_node("score_supply_chain", score_supply_chain_node)
     builder.add_node("score_finance", score_finance_node)
+    builder.add_node("score_hr", score_hr_node)
 
     # ── Convergent back-half ─────────────────────────────────────────────
     builder.add_node("generate_report", generate_report_node)
@@ -122,6 +124,7 @@ def build_supervisor_graph() -> Any:
     builder.add_edge("score_hajj_helpdesk", "generate_report")
     builder.add_edge("score_supply_chain", "generate_report")
     builder.add_edge("score_finance", "generate_report")
+    builder.add_edge("score_hr", "generate_report")
 
     builder.add_edge("generate_report", "finalise_run")
     builder.add_edge("finalise_run", "build_response")

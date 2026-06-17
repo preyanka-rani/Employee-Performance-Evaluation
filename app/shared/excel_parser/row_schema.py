@@ -72,6 +72,8 @@ TEAM_SCHEMAS: dict[str, frozenset[str]] = {
     "supply_chain": frozenset({"employee_email", "problem_solving", "kpi", "general"}),
     # Finance — CRM log-based (uses problem_solving field for Financial Accuracy)
     "finance": frozenset({"employee_email", "problem_solving", "kpi", "general"}),
+    # HR — CRM log-based (uses problem_solving field for HR Ops & Recruitment)
+    "hr": frozenset({"employee_email", "problem_solving", "kpi", "general"}),
 }
 
 

@@ -39,6 +39,7 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
     from app.teams.developer.team import DeveloperTeam
     from app.teams.finance.team import FinanceTeam
     from app.teams.gsd.team import GSDTeam
+    from app.teams.hr.team import HRTeam
     from app.teams.hajj_helpdesk.team import HajjHelpdeskTeam
     from app.teams.sqa.team import SQATeam
     from app.teams.supply_chain.team import SupplyChainTeam
@@ -68,6 +69,8 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
         "supply_chain": SupplyChainTeam,
         # ── Finance team ─────────────────────────────────────────────────
         "finance": FinanceTeam,
+        # ── HR team ─────────────────────────────────────────────────────
+        "hr": HRTeam,
         # ── To add a new team in the future ────────────────────────────────
     }
 
@@ -161,6 +164,8 @@ class TeamRegistry:
             ("finance_team", "finance"),
             ("finance", "finance"),
             ("fin", "finance"),
+            ("hr_team", "hr"),
+            ("hr", "hr"),
             ("support", "support"),  # most generic — last
         ]
         for pattern, key in fuzzy_order:
