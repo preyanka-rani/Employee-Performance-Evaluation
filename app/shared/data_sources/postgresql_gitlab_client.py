@@ -26,17 +26,15 @@ GitLab DB tables used:
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any
 
 from app.core.config import get_settings
 from app.core.logging_config import get_logger
 from app.shared.data_sources.gitlab_client import (
-    MRDiff,
-    MergeRequestData,
     _IGNORED_PATH_PATTERNS,
+    MergeRequestData,
+    MRDiff,
     _truncate_diff,
 )
 

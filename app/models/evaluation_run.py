@@ -5,7 +5,7 @@ Tracks each monthly evaluation execution cycle.
 One EvaluationRun covers an entire team for a given year/month.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import DateTime, String, func

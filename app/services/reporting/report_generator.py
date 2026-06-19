@@ -13,13 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.score_repository import (
-    AttendanceRepository,
     CodeQualityRepository,
     DeveloperFinalScoreRepository,
     FinalScoreRepository,
-    SentimentRepository,
-    TLAssessmentRepository,
-    WorkLogRepository,
 )
 from app.schemas.reports import (
     EmployeeReportResponse,

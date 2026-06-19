@@ -110,7 +110,7 @@ async def _generate_sqa_final_report(
         "Employee ID",
         "Name",
         "Email",
-        "Team",  
+        "Team",
         "Component 1 Score (0-100)",
         "  Code Quality (30%)",
         "  Resolution Rate % (35%)",
@@ -205,13 +205,13 @@ async def _generate_sqa_final_report(
         summary_df["emp_email"] = df.get("Email", "")
         summary_df["emp_name"] = df.get("Name", "")
         summary_df["team_name"] = df.get("Team", "")  # Fetches exact team name
-        
+
         summary_df["avg_functional_job_performance_30"] = df.get("Segment A Marks (0-30)", 0.0)
         summary_df["avg_office_discipline_10"] = df.get("Attendance Score (0-100)", 0.0) / 10.0
         summary_df["avg_critical_thinking_and_problem_solving_10"] = df.get("TL Problem Solving (0-10)", 0.0)
         summary_df["avg_monthly_performance_agreement_15"] = df.get("TL KPI (0-15)", 0.0)
         summary_df["avg_team_leader_assessment_15"] = df.get("TL General (0-15)", 0.0)
-        
+
         summary_df["avg_total_scores"] = (
             summary_df["avg_functional_job_performance_30"]
             + summary_df["avg_office_discipline_10"]
@@ -219,9 +219,9 @@ async def _generate_sqa_final_report(
             + summary_df["avg_monthly_performance_agreement_15"]
             + summary_df["avg_team_leader_assessment_15"]
         )
-        
+
         summary_df["reword_score_5"] = 0.0  # Added to match exact developer column structure
-        summary_df["finalize_score"] = df.get("Final Score", 0.0) 
+        summary_df["finalize_score"] = df.get("Final Score", 0.0)
         summary_df["score_percentage"] = (summary_df["finalize_score"] / 100.0).round(4)
         summary_df["Avg_eva_grade"] = summary_df["finalize_score"].apply(_get_sqa_grade)
 
@@ -271,10 +271,10 @@ async def _generate_sqa_final_report(
                 max_col=worksheet.max_column,
             ):
                 worksheet.row_dimensions[row[0].row].height = 20  # Set standard row height
-                
+
                 for idx, cell in enumerate(row):
                     cell.border = thin_border
-                    
+
                     if idx in [0, 1, 2]:  # Email, Name, Team Name
                         cell.alignment = left_align
                     else:

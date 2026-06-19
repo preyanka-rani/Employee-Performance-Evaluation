@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import os
 import pathlib
-import pandas as pd
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+import pandas as pd
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging_config import get_logger
 from app.services.reporting import report_generator
@@ -68,22 +68,22 @@ async def generate_developer_reports(
         try:
             # Read the generated final report (main sheet)
             df = pd.read_excel(fr_path, sheet_name=0)
-            
+
             # Initialize exact matching dataframe structure
             summary_df = pd.DataFrame()
-            
+
             # Map Base Info
             summary_df["emp_email"] = df.get("Email", "")
             summary_df["emp_name"] = df.get("Name", "")
             summary_df["team_name"] = df.get("Team", "")
-            
+
             # Map Segment A and Segment B Data
             summary_df["avg_functional_job_performance_50"] = df.get("Segment A Marks (0-50)", 0.0)
             summary_df["avg_office_discipline_10"] = df.get("Attendance Score (0-100)", 0.0) / 10.0
             summary_df["avg_critical_thinking_and_problem_solving_10"] = df.get("TL Problem Solving (0-10)", 0.0)
             summary_df["avg_monthly_performance_agreement_15"] = df.get("TL KPI (0-15)", 0.0)
             summary_df["avg_team_leader_assessment_15"] = df.get("TL General (0-15)", 0.0)
-            
+
             # Calculate Base Total (Out of 100 for Developers)
             summary_df["avg_total_scores"] = (
                 summary_df["avg_functional_job_performance_50"] +
@@ -92,34 +92,34 @@ async def generate_developer_reports(
                 summary_df["avg_monthly_performance_agreement_15"] +
                 summary_df["avg_team_leader_assessment_15"]
             )
-            
+
             # Map Reward Score
             summary_df["reword_score_5"] = df.get("Reward Score (0-5)", 0.0)
-            
+
             # Finalize Score and Percentage calculations
             summary_df["finalize_score"] = df.get("Final Score", 0.0)
             summary_df["score_percentage"] = (summary_df["finalize_score"] / 100.0).round(4)
-            
+
             # Apply Grading Rules using the imported function
             summary_df["Avg_eva_grade"] = summary_df["finalize_score"].apply(calculate_evaluation_grade)
-            
+
             # Append the summary_grade sheet to the existing Excel workbook
             with pd.ExcelWriter(fr_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                 summary_df.to_excel(writer, sheet_name='summary_grade', index=False)
-                
+
                 # --- START OF BEAUTIFUL FORMATTING ---
                 workbook = writer.book
                 worksheet = writer.sheets['summary_grade']
-                
+
                 # Define Styles matching your image
                 header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # Dark Blue
                 header_font = Font(color="FFFFFF", bold=True) # White & Bold
                 center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
                 thin_border = Border(
-                    left=Side(style='thin', color="BFBFBF"), 
+                    left=Side(style='thin', color="BFBFBF"),
                     right=Side(style='thin', color="BFBFBF"),
-                    top=Side(style='thin', color="BFBFBF"), 
+                    top=Side(style='thin', color="BFBFBF"),
                     bottom=Side(style='thin', color="BFBFBF")
                 )
 
@@ -129,7 +129,7 @@ async def generate_developer_reports(
                     cell.font = header_font
                     cell.alignment = center_align
                     cell.border = thin_border
-                    
+
                     # Adjust column widths dynamically based on header text
                     col_letter = get_column_letter(col_num)
                     header_length = len(str(cell.value))
@@ -147,7 +147,7 @@ async def generate_developer_reports(
                 # --- END OF BEAUTIFUL FORMATTING ---
 
             log.info("summary_grade_sheet_added_with_formatting", path=fr_path)
-            
+
         except Exception as exc:
             log.error("summary_grade_sheet_failed", error=str(exc))
 

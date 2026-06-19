@@ -4,7 +4,7 @@ app/repositories/evaluation_repository.py
 Async data-access layer for EvaluationRun records.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -40,7 +40,7 @@ class EvaluationRepository(BaseRepository[EvaluationRun]):
 
     async def mark_running(self, run: EvaluationRun) -> EvaluationRun:
         run.status = EvaluationStatus.RUNNING
-        run.started_at = datetime.now(timezone.utc)
+        run.started_at = datetime.now(UTC)
         await self._session.flush()
         return run
 
@@ -48,13 +48,13 @@ class EvaluationRepository(BaseRepository[EvaluationRun]):
         self, run: EvaluationRun, partial: bool = False
     ) -> EvaluationRun:
         run.status = EvaluationStatus.PARTIAL if partial else EvaluationStatus.COMPLETED
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         await self._session.flush()
         return run
 
     async def mark_failed(self, run: EvaluationRun, error: str) -> EvaluationRun:
         run.status = EvaluationStatus.FAILED
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         run.error_message = error[:1000]
         await self._session.flush()
         return run

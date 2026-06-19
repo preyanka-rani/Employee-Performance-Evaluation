@@ -140,8 +140,6 @@ async def bulk_run_evaluation(
         6. Generate a formatted Excel report saved to outputs/reports/
         7. Return summary stats + report path
     """
-    from app.models.evaluation_run import EvaluationRun, EvaluationStatus
-    from app.repositories.evaluation_repository import EvaluationRepository
 
     # ── 0. Resolve team key and short-circuit on conflicts ───────────────────
     from app.shared.registry import TeamRegistry

@@ -12,8 +12,8 @@ Only SELECT statements are issued; no DML operations are performed.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
 import calendar
+from datetime import date
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine

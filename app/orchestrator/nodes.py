@@ -22,15 +22,13 @@ is carried on ``state["db"]`` (not serialised in any checkpoint).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging_config import get_logger
-from app.models.employee import Employee
-from app.models.evaluation_run import EvaluationRun, EvaluationStatus
-from app.models.scores import TLAssessmentScore
+from app.models.evaluation_run import EvaluationStatus
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.repositories.score_repository import TLAssessmentRepository
@@ -38,7 +36,7 @@ from app.shared.data_sources.mysql_client import MySQLCRMClient
 from app.shared.excel_parser.parser import ExcelParseError, parse_tl_excel
 from app.shared.excel_parser.row_schema import CanonicalRow
 from app.shared.persistence.run_orchestrator import RunOrchestrator
-from app.shared.registry import TeamRegistry, TEAMS
+from app.shared.registry import TEAMS, TeamRegistry
 from app.shared.state import OrchestratorState
 from app.teams.base import TeamContext
 
@@ -518,14 +516,14 @@ async def finalise_run_node(state: OrchestratorState) -> dict[str, Any]:
 
     if processed == 0:
         run.status = EvaluationStatus.FAILED
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         run.error_message = f"All {failed} employees failed scoring."[:1000]
     elif failed > 0:
         run.status = EvaluationStatus.PARTIAL
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
     else:
         run.status = EvaluationStatus.COMPLETED
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
 
     await db.commit()
     log.info(

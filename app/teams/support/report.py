@@ -345,7 +345,6 @@ async def generate_support_excel_report(
     #   <TL general - original name> |
     #   Avg_eval_scores | Percentage | Avg_eva_grade
     # ═════════════════════════════════════════════════════════════════════════
-    import calendar  # noqa: PLC0415
 
     ws2 = wb.create_sheet("Final Summary")
 

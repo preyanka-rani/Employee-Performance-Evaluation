@@ -45,6 +45,7 @@ from app.repositories.score_repository import (
     WorkLogRepository,
 )
 from app.shared.excel_parser.row_schema import CanonicalRow
+from app.shared.persistence.summary_upserter import upsert_performance_summary
 from app.teams.base import TeamContext, TeamContract
 from app.teams.developer.graph import run_developer_worker
 from app.teams.developer.report import generate_developer_reports
@@ -311,6 +312,22 @@ class DeveloperTeam(TeamContract):
             )
         )
         await db.flush()
+
+        # ── Centralized Performance Summary ──────────────────────────────────
+        await upsert_performance_summary(
+            emp_email=employee.email,
+            emp_name=employee.name,
+            team_name=self.team_key,
+            year=year,
+            month=month,
+            financial_contribution=state.get("reward", 0.0),
+            functional_job=state["segment_a_marks"],
+            critical_thinking_and_problem_solving=state["tl_problem_solving"],
+            office_discipline=state["attendance_marks"],
+            performance_agreement=state["tl_kpi"],
+            team_lead_assessment=state["tl_general"],
+            consolidated_score=state["final_score"],
+        )
 
         # ── Build result dict (mirrors legacy DeveloperScorer.calculate result) ─
         result.update(

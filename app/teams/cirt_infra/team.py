@@ -41,6 +41,7 @@ from app.repositories.score_repository import (
     WorkLogRepository,
 )
 from app.shared.excel_parser.row_schema import CanonicalRow
+from app.shared.persistence.summary_upserter import upsert_performance_summary
 from app.teams.base import TeamContext, TeamContract
 from app.teams.cirt_infra.graph import run_cirt_infra_worker
 from app.teams.cirt_infra.report import generate_cirt_infra_excel_report
@@ -219,6 +220,21 @@ class CIRTInfraTeam(TeamContract):
         # Flush so FinalScore gets its rowid before any subsequent reads
         # (matches the developer/team pattern).
         await db.flush()
+
+        await upsert_performance_summary(
+            emp_email=employee.email,
+            emp_name=employee.name,
+            team_name=self.team_key,
+            year=year,
+            month=month,
+            financial_contribution=0.0,
+            functional_job=state["segment_a_marks"],
+            critical_thinking_and_problem_solving=state["tl_support_readiness"],
+            office_discipline=state["attendance_marks"],
+            performance_agreement=state["tl_kpi"],
+            team_lead_assessment=state["tl_general"],
+            consolidated_score=state["final_score"],
+        )
 
         # ── Build result dict (mirrors legacy CIRT evaluation result) ────────
         result.update(

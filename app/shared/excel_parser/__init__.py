@@ -12,7 +12,7 @@ from app.shared.excel_parser.parser import (
     ParseResult,
     parse_tl_excel,
 )
-from app.shared.excel_parser.row_schema import CanonicalRow, REQUIRED_FIELDS
+from app.shared.excel_parser.row_schema import REQUIRED_FIELDS, CanonicalRow
 
 __all__ = [
     "ExcelParseError",

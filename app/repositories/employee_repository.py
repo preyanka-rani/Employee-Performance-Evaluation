@@ -54,7 +54,7 @@ class EmployeeRepository(BaseRepository[Employee]):
         This completely avoids `UNIQUE constraint failed: employees.email`.
         """
         emp = await self.get_by_email(email)
-        
+
         if emp:
             # Update existing employee
             emp.name = name
@@ -73,6 +73,6 @@ class EmployeeRepository(BaseRepository[Employee]):
                 gitlab_username=gitlab_username,
             )
             self._session.add(emp)
-            
+
         await self._session.flush()
         return emp

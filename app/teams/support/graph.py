@@ -52,6 +52,7 @@ from app.services.ai.sentiment import compute_employee_sentiment_score
 from app.shared.data_sources.mysql_client import MySQLHRClient
 from app.shared.data_sources.support_crm_client import SupportCRMClient
 from app.shared.data_sources.support_tickets_client import SupportTicketsClient
+from app.shared.persistence.summary_upserter import upsert_performance_summary
 from app.teams.support.formulas import (
     compute_attendance_marks,
     compute_crm_log_score,
@@ -623,9 +624,28 @@ async def persist_results_node(state: SupportEvalState, db: AsyncSession) -> dic
         )
         db.add(final_row)
 
+        await upsert_performance_summary(
+            emp_email=email,
+            team_name=state["team"],
+            year=year,
+            month=month,
+            financial_contribution=0.0,
+            functional_job=state["segment_a_marks"],
+            critical_thinking_and_problem_solving=state["tl_support_readiness"],
+            office_discipline=state["attendance_marks"],
+            performance_agreement=state["tl_kpi"],
+            team_lead_assessment=state["tl_general"],
+            consolidated_score=state["final_score"],
+        )
+
         await db.commit()
         logger.info("support_scores_persisted", email=email)
         return {"persisted": True, "persist_error": None}
+
+    except Exception as exc:
+        await db.rollback()
+        logger.error("support_scores_persist_failed", email=email, error=str(exc))
+        return {"persisted": False, "persist_error": str(exc)}
 
     except Exception as exc:
         await db.rollback()

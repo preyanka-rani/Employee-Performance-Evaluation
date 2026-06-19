@@ -11,9 +11,9 @@ from app.services.ai.sentiment import compute_employee_sentiment_score
 from app.shared.data_sources.mysql_client import MySQLHRClient
 from app.shared.data_sources.support_crm_client import SupportCRMClient
 from app.teams.application.formulas import (
-    compute_attendance_marks,
     compute_application_final_score,
     compute_application_functional_score,
+    compute_attendance_marks,
     compute_segment_a_marks,
     compute_segment_b_marks,
     compute_tl_total,

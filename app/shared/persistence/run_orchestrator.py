@@ -13,7 +13,7 @@ Wraps EvaluationRepository to provide a clean async API for the orchestrator:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,19 +52,19 @@ class RunOrchestrator:
 
     async def mark_running(self, run: EvaluationRun) -> None:
         run.status = EvaluationStatus.RUNNING
-        run.started_at = datetime.now(timezone.utc)
+        run.started_at = datetime.now(UTC)
         await self._db.flush()
 
     async def mark_completed(
         self, run: EvaluationRun, partial: bool = False
     ) -> None:
         run.status = EvaluationStatus.PARTIAL if partial else EvaluationStatus.COMPLETED
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         await self._db.flush()
 
     async def mark_failed(self, run: EvaluationRun, error: str) -> None:
         run.status = EvaluationStatus.FAILED
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         run.error_message = error[:1000]
         await self._db.flush()
 

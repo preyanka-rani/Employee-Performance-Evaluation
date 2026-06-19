@@ -16,9 +16,7 @@ Usage in Swagger UI:
   6. All protected endpoints now work.
 """
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from fastapi import Form
+from fastapi import APIRouter, Form, HTTPException, status
 
 from app.core.config import get_settings
 from app.core.security import create_access_token

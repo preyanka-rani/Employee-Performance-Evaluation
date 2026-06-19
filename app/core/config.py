@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/evaluation.db"
     database_echo: bool = False
 
+    # ── MySQL Evaluation Results Database (WRITE) ─────────────────────────────
+    mysql_summary_url: str = ""
+
     # ── MySQL Source Databases (READ-ONLY) ────────────────────────────────────
     mysql_crm_host: str = "localhost"
     mysql_crm_port: int = 3306
@@ -88,10 +91,10 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
-        allowed_prefixes = ("sqlite+aiosqlite://", "postgresql+asyncpg://")
+        allowed_prefixes = ("sqlite+aiosqlite://",)
         if not any(v.startswith(p) for p in allowed_prefixes):
             raise ValueError(
-                "DATABASE_URL must use 'sqlite+aiosqlite://' or 'postgresql+asyncpg://'"
+                "DATABASE_URL must use 'sqlite+aiosqlite://'"
             )
         return v
 

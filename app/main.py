@@ -4,24 +4,25 @@ app/main.py
 FastAPI application entry-point.
 
 Lifespan:
-  startup  → configure_logging(), init_db()
+  startup  → configure_logging(), init_db(), init_mysql_tables()
   shutdown → (nothing; connection pool cleaned up automatically)
 """
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import get_settings
-from app.core.database import init_db
-from app.core.logging_config import configure_logging, get_logger
+from app.api.v1.auth import router as auth_router
 from app.api.v1.evaluations import router as evaluations_router
 from app.api.v1.health import router as health_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.uploads import router as uploads_router
-from app.api.v1.auth import router as auth_router
+from app.core.config import get_settings
+from app.core.database import init_db
+from app.core.logging_config import configure_logging, get_logger
+from app.core.mysql_db import init_mysql_tables
 
 settings = get_settings()
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger = get_logger(__name__)
     logger.info("startup", debug=settings.debug)
     await init_db()
+    await init_mysql_tables()
     yield
     logger.info("shutdown")
 

@@ -32,15 +32,15 @@ if TYPE_CHECKING:
 # ── The single source of truth ────────────────────────────────────────────────
 # Lazy imports inside the dict to avoid circular dependencies on startup.
 
-def _build_teams() -> dict[str, type["TeamContract"]]:
+def _build_teams() -> dict[str, type[TeamContract]]:
     """Build the TEAMS dict.  Called once at module import."""
     from app.teams.application.team import ApplicationTeam
     from app.teams.cirt_infra.team import CIRTInfraTeam
     from app.teams.developer.team import DeveloperTeam
     from app.teams.finance.team import FinanceTeam
     from app.teams.gsd.team import GSDTeam
-    from app.teams.hr.team import HRTeam
     from app.teams.hajj_helpdesk.team import HajjHelpdeskTeam
+    from app.teams.hr.team import HRTeam
     from app.teams.sqa.team import SQATeam
     from app.teams.supply_chain.team import SupplyChainTeam
     from app.teams.support.team import SupportTeam
@@ -75,7 +75,7 @@ def _build_teams() -> dict[str, type["TeamContract"]]:
     }
 
 
-TEAMS: dict[str, type["TeamContract"]] = _build_teams()
+TEAMS: dict[str, type[TeamContract]] = _build_teams()
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ class TeamRegistry:
         return team_key in TEAMS
 
     @staticmethod
-    def get(team_key: str) -> type["TeamContract"] | None:
+    def get(team_key: str) -> type[TeamContract] | None:
         return TEAMS.get(team_key)
 
     @staticmethod
@@ -178,7 +178,7 @@ class TeamRegistry:
         )
 
 
-def get_team(team_key: str) -> type["TeamContract"]:
+def get_team(team_key: str) -> type[TeamContract]:
     """Shorthand: return the TeamContract class for a key. Raises KeyError."""
     cls = TEAMS.get(team_key)
     if cls is None:

@@ -13,13 +13,13 @@ Design decisions:
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import event, text
 
 from app.core.config import get_settings
 
@@ -83,7 +83,7 @@ async def init_db() -> None:
             await conn.execute(text("PRAGMA foreign_keys=ON"))
 
         # Import all models so their metadata is registered before create_all
-        from app.models import employee, evaluation_run, scores  # noqa: F401
+        from app.models import employee, evaluation_run, performance_summary, scores  # noqa: F401
 
         await conn.run_sync(Base.metadata.create_all)
 

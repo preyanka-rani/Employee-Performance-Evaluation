@@ -1,6 +1,7 @@
 # app/models/__init__.py
 from app.models.employee import Employee
 from app.models.evaluation_run import EvaluationRun, EvaluationStatus
+from app.models.performance_summary import EmployeePerformanceSummary
 from app.models.scores import (
     AttendanceScore,
     CodeQualityScore,
@@ -20,4 +21,5 @@ __all__ = [
     "WorkLogScore",
     "TLAssessmentScore",
     "FinalScore",
+    "EmployeePerformanceSummary",
 ]

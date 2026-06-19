@@ -10,7 +10,6 @@ the developer LangGraph nodes; nothing in this file has been changed.
 
 from __future__ import annotations
 
-
 # ── Component 1 sub-score helpers ─────────────────────────────────────────────
 
 

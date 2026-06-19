@@ -34,7 +34,7 @@ import pandas as pd
 
 from app.core.logging_config import get_logger
 from app.shared.excel_parser.ai_mapper import map_columns_with_ai
-from app.shared.excel_parser.row_schema import CanonicalRow, TEAM_SCHEMAS
+from app.shared.excel_parser.row_schema import TEAM_SCHEMAS, CanonicalRow
 
 logger = get_logger(__name__)
 

@@ -4,7 +4,7 @@ app/api/deps.py
 FastAPI dependency functions for auth and DB sessions.
 """
 
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer

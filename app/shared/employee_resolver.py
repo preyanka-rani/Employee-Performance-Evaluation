@@ -10,9 +10,9 @@ unifies that lookup so the orchestrator can do it once, regardless of team.
 
 from __future__ import annotations
 
+from app.core.logging_config import get_logger
 from app.shared.data_sources.mysql_client import MySQLCRMClient
 from app.shared.excel_parser.row_schema import CanonicalRow
-from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 

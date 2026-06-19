@@ -279,7 +279,6 @@ async def generate_gsd_excel_report(
     # ═════════════════════════════════════════════════════════════════════════
     # SHEET 2 – Final Summary
     # ═════════════════════════════════════════════════════════════════════════
-    import calendar
 
     ws2 = wb.create_sheet("Final Summary")
 

@@ -21,6 +21,7 @@ from app.repositories.score_repository import (
     WorkLogRepository,
 )
 from app.shared.excel_parser.row_schema import CanonicalRow
+from app.shared.persistence.summary_upserter import upsert_performance_summary
 from app.teams.base import TeamContext, TeamContract
 from app.teams.hr.graph import run_hr_worker
 from app.teams.hr.report import generate_hr_excel_report
@@ -155,6 +156,21 @@ class HRTeam(TeamContract):
         )
 
         await db.flush()
+
+        await upsert_performance_summary(
+            emp_email=employee.email,
+            emp_name=employee.name,
+            team_name=self.team_key,
+            year=year,
+            month=month,
+            financial_contribution=0.0,
+            functional_job=state["segment_a_marks"],
+            critical_thinking_and_problem_solving=state["tl_problem_solving"],
+            office_discipline=state["attendance_marks"],
+            performance_agreement=state["tl_kpi"],
+            team_lead_assessment=state["tl_general"],
+            consolidated_score=state["final_score"],
+        )
 
         result.update({
             "final_score": state["final_score"],

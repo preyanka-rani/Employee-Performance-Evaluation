@@ -40,8 +40,7 @@ to:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
+from dataclasses import dataclass
 
 # Fields the parser ALWAYS must resolve — independent of team.
 REQUIRED_FIELDS: frozenset[str] = frozenset(
