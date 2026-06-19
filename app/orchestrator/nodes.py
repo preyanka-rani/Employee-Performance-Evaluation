@@ -213,7 +213,7 @@ async def upsert_employees_and_tl_node(
     log.info("evaluation_run_created", employee_count=len(rows))
 
     # ── Upsert employees + TL scores ─────────────────────────────────────
-    is_support = team_key in ("impl_its", "onsite_support", "production", "tech_support", "support", "cirt_infra")
+    is_support = team_key in ("impl_its", "onsite_support", "production", "tech_support", "support", "gsd", "cirt_infra", "application", "hajj_helpdesk")
     from app.shared.persistence.tl_upserter import TLUpserter
 
     upserter = TLUpserter(db)
@@ -290,6 +290,16 @@ async def score_support_node(state: OrchestratorState) -> dict[str, Any]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 6a. SCORE-GSD NODE
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def score_gsd_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the GSDTeam worker."""
+    return await _score_team_node(state, team_key="gsd")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 6b. SCORE-CIRT-INFRA NODE
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -297,6 +307,26 @@ async def score_support_node(state: OrchestratorState) -> dict[str, Any]:
 async def score_cirt_infra_node(state: OrchestratorState) -> dict[str, Any]:
     """Score every employee using the CIRTInfraTeam worker."""
     return await _score_team_node(state, team_key="cirt_infra")
+
+
+async def score_application_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the ApplicationTeam worker."""
+    return await _score_team_node(state, team_key="application")
+
+
+async def score_sqa_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the SQATeam worker."""
+    return await _score_team_node(state, team_key=state["team_key"])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6c. SCORE-HAJJ-HELPDESK NODE
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def score_hajj_helpdesk_node(state: OrchestratorState) -> dict[str, Any]:
+    """Score every employee using the HajjHelpdeskTeam worker."""
+    return await _score_team_node(state, team_key="hajj_helpdesk")
 
 
 # ── Shared scorer loop ────────────────────────────────────────────────────────

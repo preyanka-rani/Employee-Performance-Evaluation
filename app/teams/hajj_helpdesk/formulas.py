@@ -1,11 +1,11 @@
 """
-app/teams/support/formulas.py
-─────────────────────────────
-Pure scoring formula functions for Support Team evaluation.
+app/teams/hajj_helpdesk/formulas.py
+────────────────────────────────────
+Pure scoring formula functions for Hajj Helpdesk Team evaluation.
 
 All functions are stateless and free of I/O — they take numbers, return numbers.
 Every formula is derived from the authoritative rules in:
-  documentation/Employee Performance Evaluation___.md  (Section 2)
+  documentation/Employee Performance Evaluation___.md  (Section 8)
 
 Score structure reference (max 100):
   ┌─ Segment A: Functional Performance          max 30
@@ -17,31 +17,31 @@ Score structure reference (max 100):
   │   tl_marks           = readiness + kpi + gen   (0-40)
   │   segment_b_marks    = attendance + tl
   │
-  └─ Final: (base_total / 80) * 100    (no reward marks for support teams)
+  └─ Final: (base_total / 80) * 100    (no reward marks for hajj_helpdesk)
 """
 
 from __future__ import annotations
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CRM Log Hour Normalisation
+# CRM Log Hour Normalisation (identical to Support team tiers)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def normalise_support_log_hours(hours: float) -> float:
+def normalise_hajj_helpdesk_log_hours(hours: float) -> float:
     """
-    Convert raw log hours into a 0-100 score using support-team specific tiers.
+    Convert raw log hours into a 0-100 score using Hajj Helpdesk-team specific tiers.
 
-    Reference: funcational_log_activities.py  transform() function (manual codebase).
+    Reference: Section 8 of Employee Performance Evaluation document.
 
-    Exact thresholds — strictly greater-than (matches the manual code):
-        > 160  → 100
-        > 140  → 80
-        > 130  → 70
-        > 120  → 60
-        > 110  → 50
-        >  80  → 40
-        == 0   → 0
-        else   → 20   (0 < hours <= 80)
+    Exact thresholds:
+        >= 160  → 100
+        >= 140  → 80
+        >= 130  → 70
+        >= 120  → 60
+        >= 110  → 50
+        >=  80  → 40
+        == 0    → 0
+        else    → 20   (0 < hours <= 80)
     """
     if hours >= 160:
         return 100.0
@@ -73,16 +73,18 @@ def compute_crm_log_score(
     """
     Compute the final CRM log score from normalised hours and sentiment.
 
+    Formula: final_crm_log_score = (log_hours_score * 0.9) + (sentiment_score * 0.1)
+
     Args:
-        log_hours:      Total raw log hours for the month.
-        sentiment_score: Averaged TextBlob  0-100.
+        log_hours:       Total raw log hours for the month.
+        sentiment_score: Averaged TextBlob 0-100.
 
     Returns:
         (log_hours_score, crm_log_score)
           log_hours_score: tiered normalised hours (0-100)
           crm_log_score:   weighted composite (0-100)
     """
-    log_hours_score = normalise_support_log_hours(log_hours)
+    log_hours_score = normalise_hajj_helpdesk_log_hours(log_hours)
     crm_log_score = round(log_hours_score * 0.9 + sentiment_score * 0.1, 2)
     return log_hours_score, crm_log_score
 
@@ -96,9 +98,9 @@ def compute_monthly_tickets_score(total_tickets: int) -> float:
     """
     Volume-based ticket score.
 
-    Reference: tickets_score.sql CASE expression.
+    Reference: Section 8 of Employee Performance Evaluation document.
 
-    ≥30 → 100 | ≥20 → 80 | ≥10 → 70 | >0 → 60 | =0 → 40
+    >=30 → 100 | >=20 → 80 | >=10 → 70 | >0 → 60 | =0 → 40
     """
     if total_tickets >= 30:
         return 100.0
@@ -118,9 +120,7 @@ def compute_ticket_resolution_score(average_taken_days: float) -> float:
     """
     Speed-based ticket resolution score.
 
-    Reference: tickets_score.sql CASE expression.
-
-    avg_days ≤ 2 → 100 | else → 60
+    avg_days <= 2 → 100 | else → 60
     """
     return 100.0 if average_taken_days <= 2.0 else 60.0
 
@@ -131,6 +131,8 @@ def compute_tickets_evaluation_score(
 ) -> tuple[float, float, float]:
     """
     Compute combined ticket evaluation score.
+
+    Formula: tickets_evaluation_score = (monthly_tickets_score * 0.7) + (monthly_ticket_resolved_score * 0.3)
 
     Returns:
         (monthly_tickets_score, monthly_ticket_resolved_score, tickets_evaluation_score)
@@ -215,14 +217,14 @@ def compute_segment_b_marks(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def compute_support_final_score(
+def compute_hajj_helpdesk_final_score(
     segment_a_marks: float,
     segment_b_marks: float,
 ) -> tuple[float, float]:
     """
     Compute base total and final score.
 
-    NOTE: Support teams do NOT have reward marks (unlike developers).
+    NOTE: Hajj Helpdesk team does NOT have reward marks.
           The evaluation table shows no reward row; the final score
           is simply the base total normalised to 100 scale.
 

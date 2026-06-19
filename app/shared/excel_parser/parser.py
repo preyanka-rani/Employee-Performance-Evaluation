@@ -34,7 +34,7 @@ import pandas as pd
 
 from app.core.logging_config import get_logger
 from app.shared.excel_parser.ai_mapper import map_columns_with_ai
-from app.shared.excel_parser.row_schema import CanonicalRow
+from app.shared.excel_parser.row_schema import CanonicalRow, TEAM_SCHEMAS
 
 logger = get_logger(__name__)
 
@@ -104,7 +104,6 @@ _ALIAS_MAP: dict[str, str] = {
     "id": "employee_id",
     "staff_id": "employee_id",
     "personnel_id": "employee_id",
-    "sl": "employee_id",
     # ── problem_solving (developer 0-10) ─────────────────────────────────────
     "problem_solving": "problem_solving",
     "tl_problem_solving": "problem_solving",
@@ -385,12 +384,17 @@ async def parse_tl_excel(
 
     The function is **async** because Stage 2 may call the LLM API.
 
+    When ``team_key`` is provided and exists in ``TEAM_SCHEMAS``, the parser
+    validates that the **team-specific** required fields are present (e.g.
+    ``problem_solving`` for developer/SQA, ``support_readiness`` for support).
+    Without a recognised team key the generic ``_REQUIRED_BASE`` logic applies,
+    accepting either score field.
+
     Args:
         file_bytes: Raw bytes of the uploaded .xlsx/.xls file.
-        team_key:   Optional team key for logging only (e.g. "developer",
-                    "impl_its"). The parser does not enforce team-specific
-                    column requirements — both developer (problem_solving)
-                    and support (support_readiness) are accepted.
+        team_key:   Team key used to look up team-specific field requirements
+                    in ``TEAM_SCHEMAS``.  Pass ``"sqa"`` to enforce the SQA
+                    contract (``problem_solving``, not ``support_readiness``).
 
     Returns:
         ParseResult with valid rows and per-row warning strings.
@@ -401,12 +405,24 @@ async def parse_tl_excel(
     """
     log = logger.bind(team=team_key) if team_key else logger
 
+    # Determine which score field the team requires
+    team_fields = TEAM_SCHEMAS.get(team_key)
+    if team_fields is not None:
+        required_base: set[str] = set(team_fields) - {"problem_solving", "support_readiness"}
+        ps_field: str = (
+            "problem_solving" if "problem_solving" in team_fields else "support_readiness"
+        )
+        log.info("team_schema_active", team=team_key, required=sorted(team_fields))
+    else:
+        required_base = set(_REQUIRED_BASE)
+        ps_field = "problem_solving"  # default — either is accepted at validation
+
     # ── Load file (with automatic header-row detection) ───────────────────────
     df, raw_headers = _load_with_header_detection(file_bytes)
 
     # ── Stage 1: static alias matching ───────────────────────────────────────
     col_map: dict[str, str] = _build_column_map_static(raw_headers)
-    missing: set[str] = set(_REQUIRED_BASE) - set(col_map.keys())
+    missing: set[str] = required_base - set(col_map.keys())
     # Need at least ONE of problem_solving or support_readiness
     has_ps = "problem_solving" in col_map or "support_readiness" in col_map
     if not has_ps:
@@ -434,7 +450,7 @@ async def parse_tl_excel(
             log.warning("ai_mapping_skipped", reason=str(exc))
 
         # Recompute missing after AI attempt
-        missing = set(_REQUIRED_BASE) - set(col_map.keys())
+        missing = required_base - set(col_map.keys())
         has_ps = "problem_solving" in col_map or "support_readiness" in col_map
         if not has_ps:
             missing.add("problem_solving_or_support_readiness")
@@ -462,12 +478,15 @@ async def parse_tl_excel(
     rows: list[CanonicalRow] = []
 
     # Drop rows that are completely null across all required columns
-    required_raw_cols = [col_map[f] for f in _REQUIRED_BASE if f in col_map]
-    if has_ps:
-        ps_field = (
-            "problem_solving" if "problem_solving" in col_map else "support_readiness"
-        )
-        required_raw_cols.append(col_map[ps_field])
+    if team_fields is not None:
+        row_base_fields: set[str] = set(team_fields)
+    else:
+        row_base_fields = set(_REQUIRED_BASE)
+        if "problem_solving" in col_map:
+            row_base_fields.add("problem_solving")
+        elif "support_readiness" in col_map:
+            row_base_fields.add("support_readiness")
+    required_raw_cols = [col_map[f] for f in row_base_fields if f in col_map]
     df = df.dropna(subset=required_raw_cols, how="all").reset_index(drop=True)
 
     for idx, row_series in df.iterrows():

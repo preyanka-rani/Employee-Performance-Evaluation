@@ -38,20 +38,20 @@ class OrchestratorState(TypedDict, total=False):
     """
 
     # ── Inputs (set by API endpoint before invocation) ────────────────────────
-    raw_team_input: str          # human-readable team name from the request
+    raw_team_input: str  # human-readable team name from the request
     year: int
     month: int
     file_bytes: bytes
 
     # ── After parse_excel_node ────────────────────────────────────────────────
-    team_key: str                # normalised team key (e.g. "developer")
+    team_key: str  # normalised team key (e.g. "developer")
     parsed_rows: list[CanonicalRow]
     parse_warnings: list[str]
     col_names: dict[str, str]
     team_display_name: str
 
     # ── After resolve_employee_ids_node ───────────────────────────────────────
-    rows_with_ids: list[CanonicalRow]   # patched with employee_id where resolved
+    rows_with_ids: list[CanonicalRow]  # patched with employee_id where resolved
 
     # ── After create_run_node ─────────────────────────────────────────────────
     run_id: int
@@ -62,11 +62,11 @@ class OrchestratorState(TypedDict, total=False):
     failed_count: int
     successful_emails: list[str]
     scoring_errors: list[dict[str, Any]]
-    team_results: list[dict[str, Any]]   # per-employee result dicts
+    team_results: list[dict[str, Any]]  # per-employee result dicts
 
     # ── After generate_report_node ─────────────────────────────────────────────
     report_path: str | None
-    secondary_report_path: str | None    # e.g. CodeQuality for developer
+    secondary_report_path: str | None  # e.g. CodeQuality for developer
 
     # ── Final response (set by build_response_node) ───────────────────────────
     summary: dict[str, Any]

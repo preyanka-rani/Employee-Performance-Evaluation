@@ -140,3 +140,16 @@ def compute_reward(
 def compute_final_score(base_total: float, reward: float) -> float:
     """final_score = ((base_total + reward) / 105) * 100"""
     return round(((base_total + reward) / 105) * 100, 2)
+
+def calculate_evaluation_grade(pct_value: float) -> str:
+    """
+    Calculate the evaluation grade based on the percentage score.
+    Rules: 88-100=A, 84-87=B, 75-83=C, 0-74=D
+    """
+    if pct_value >= 88:
+        return 'A'
+    if pct_value >= 84:
+        return 'B'
+    if pct_value >= 75:
+        return 'C'
+    return 'D'

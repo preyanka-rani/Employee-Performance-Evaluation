@@ -1,22 +1,12 @@
 """
-app/teams/developer/team.py
-───────────────────────────
-DeveloperTeam — the LangGraph-backed implementation of the
-TeamContract for the "developer" team.
+app/teams/sqa/team.py
+─────────────────────
+SQATeam — LangGraph-backed implementation of TeamContract for "sqa".
 
-This class is the only place that talks to the DB. The graph
-(app/teams/developer/graph.py) is **pure** — it only computes scores.
-``run_per_employee`` then writes them in the EXACT order used by the
-legacy ``DeveloperScorer.calculate()`` to guarantee 100 % functional
-parity (same rows, same column values, same row-write sequence).
-
-Legacy DB write order (preserved 1-for-1):
-    1. CodeQualityScore  (one row per MR bundle, or one "no_commits" sentinel)
-    2. WorkLogScore      (one row)
-    3. SentimentScore    (one row)
-    4. AttendanceScore   (one row)
-    5. FinalScore        (one row)  → flushed
-    6. DeveloperFinalScore (one row) → flushed
+Key differences from DeveloperTeam:
+  - Segment A marks out of 30 (not 50)
+  - No reward marks
+  - Final score = (base_total / 80) * 100
 """
 
 from __future__ import annotations
@@ -46,46 +36,24 @@ from app.repositories.score_repository import (
 )
 from app.shared.excel_parser.row_schema import CanonicalRow
 from app.teams.base import TeamContext, TeamContract
-from app.teams.developer.graph import run_developer_worker
-from app.teams.developer.report import generate_developer_reports
+from app.teams.sqa.graph import run_sqa_worker
+from app.teams.sqa.report import generate_sqa_reports
 
 logger = get_logger(__name__)
 
 
-class DeveloperTeam(TeamContract):
-    """
-    Developer worker team.
+class SQATeam(TeamContract):
+    team_key: ClassVar[str] = "sqa"
+    display_name: ClassVar[str] = "SQA"
+    aliases: ClassVar[frozenset[str]] = frozenset({"sqa", "qa"})
 
-    Delegates per-employee scoring to a LangGraph (graph.py) and then
-    persists the computed scores via the standard SQLAlchemy repositories.
-    """
-
-    # ── Class-level configuration ─────────────────────────────────────────────
-    team_key: ClassVar[str] = "developer"
-    display_name: ClassVar[str] = "Developer"
-    aliases: ClassVar[frozenset[str]] = frozenset({"developer", "dev"})
-
-    # The compiled graph lives in app/teams/developer/graph.py and is
-    # invoked inside run_per_employee. We mark the attribute here so the
-    # base-class type-check is satisfied and discovery tools can inspect
-    # which teams expose a graph.
-    graph: ClassVar[StateGraph | None] = None  # actual graph is module-level in graph.py
-
-    # ── Per-employee scoring ──────────────────────────────────────────────────
+    graph: ClassVar[StateGraph | None] = None
 
     async def run_per_employee(
         self,
         row: CanonicalRow,
         ctx: TeamContext,
     ) -> dict[str, Any]:
-        """
-        Score a single developer employee and persist the result.
-
-        Mirrors the legacy DeveloperScorer.calculate() body, including
-        the exact row-write order:
-            CodeQuality → WorkLog → Sentiment → Attendance →
-            FinalScore → DeveloperFinalScore
-        """
         run_id: int = ctx["run_id"]
         year: int = ctx["year"]
         month: int = ctx["month"]
@@ -102,15 +70,9 @@ class DeveloperTeam(TeamContract):
             "error": None,
         }
 
-        log = logger.bind(
-            employee_id=row.employee_id,
-            run_id=run_id,
-            year=year,
-            month=month,
-        )
-        log.info("developer_team_run_start")
+        log = logger.bind(employee_id=row.employee_id, run_id=run_id, year=year, month=month)
+        log.info("sqa_team_run_start")
 
-        # ── Look up the canonical Employee record ────────────────────────────
         emp_repo = EmployeeRepository(db)
         employee: Employee | None = await emp_repo.get_by_employee_id(row.employee_id)
         if employee is None:
@@ -119,9 +81,8 @@ class DeveloperTeam(TeamContract):
             result["error"] = msg
             return result
 
-        # ── Run the pure worker graph (computes all scores) ──────────────────
         try:
-            state = await run_developer_worker(
+            state = await run_sqa_worker(
                 employee_id=employee.employee_id,
                 employee_email=employee.email,
                 employee_name=employee.name,
@@ -132,18 +93,14 @@ class DeveloperTeam(TeamContract):
                 db=db,
             )
         except Exception as exc:
-            log.error("developer_worker_graph_failed", error=str(exc))
+            log.error("sqa_worker_graph_failed", error=str(exc))
             result["error"] = str(exc)
             return result
 
-        # If the graph hit a fatal fetch error, mirror legacy behaviour
-        # (no DB writes, propagate the error).
         if state.get("fetch_error"):
-            log.error("developer_worker_fetch_error", error=state["fetch_error"])
+            log.error("sqa_worker_fetch_error", error=state["fetch_error"])
             result["error"] = state["fetch_error"]
             return result
-
-        # ── Persist in legacy order ──────────────────────────────────────────
 
         # 1. CodeQualityScore rows
         mr_scores: list[dict] = state.get("mr_scores", []) or []
@@ -176,22 +133,14 @@ class DeveloperTeam(TeamContract):
                     evaluation_run_id=run_id,
                     employee_email=employee.email,
                     mr_reference="no_commits_found",
-                    mr_title=(
-                        f"No commits found for GitLab user '{gitlab_username_used}' "
-                        f"in {year}-{month:02d}"
-                    ),
+                    mr_title=f"No commits found for GitLab user '{gitlab_username_used}' in {year}-{month:02d}",
                     raw_score=0.0,
                     readability_score=0.0,
                     logic_efficiency_score=0.0,
                     error_handling_score=0.0,
                     architecture_score=0.0,
                     security_score=0.0,
-                    reasoning=(
-                        f"No GitLab commits were found for employee '{employee.name}' "
-                        f"(email: {employee.email}, GitLab username used: "
-                        f"'{gitlab_username_used}') during {year}-{month:02d}. "
-                        "No code quality score has been assigned."
-                    ),
+                    reasoning=f"No GitLab commits were found for employee '{employee.name}' (email: {employee.email}, GitLab username used: '{gitlab_username_used}') during {year}-{month:02d}. No code quality score has been assigned.",
                     issues="[]",
                     model_used="no_commits",
                 )
@@ -241,7 +190,7 @@ class DeveloperTeam(TeamContract):
             )
         )
 
-        # 5. FinalScore (matches legacy round values)
+        # 5. FinalScore
         component2 = state["component2"]
         seg_a_raw = round((state["quality_check"] + component2) / 2, 4)
         fs_repo = FinalScoreRepository(db)
@@ -266,18 +215,15 @@ class DeveloperTeam(TeamContract):
                 tl_total=state["tl_total"],
                 segment_b_marks=state["segment_b_marks"],
                 base_total=state["base_total"],
-                reward_score=state["reward"],
+                reward_score=0.0,
                 final_score=state["final_score"],
                 year=year,
                 month=month,
             )
         )
-
-        # Flush so FinalScore gets its rowid before DeveloperFinalScore is
-        # inserted (matches legacy behaviour).
         await db.flush()
 
-        # 6. DeveloperFinalScore (24-col report twin)
+        # 6. DeveloperFinalScore (reuse the same 24-col table for SQA)
         db.add(
             DeveloperFinalScore(
                 evaluation_run_id=run_id,
@@ -306,41 +252,36 @@ class DeveloperTeam(TeamContract):
                 tl_total=state["tl_total"],
                 segment_b_marks=state["segment_b_marks"],
                 base_total=state["base_total"],
-                reward_score=state["reward"],
+                reward_score=0.0,
                 final_score=state["final_score"],
             )
         )
         await db.flush()
 
-        # ── Build result dict (mirrors legacy DeveloperScorer.calculate result) ─
-        result.update(
-            {
-                "final_score": state["final_score"],
-                "segment_a_marks": state["segment_a_marks"],
-                "segment_b_marks": state["segment_b_marks"],
-                "base_total": state["base_total"],
-                "reward_score": state["reward"],
-                "component1_score": state["quality_check"],
-                "code_quality_ai": state["code_quality_ai"],
-                "resolution_rate": round(state["resolution_rate"], 4),
-                "reopen_quality_score": round(state["reopen_quality"], 4),
-                "lines_added_score": state["lines_added_score"],
-                "lines_deleted_score": state["lines_deleted_score"],
-                "component2_score": component2,
-                "work_log_hours": state["total_hours"],
-                "work_log_score": state["work_log_score"],
-                "sentiment_score": state["sentiment_avg"],
-                "attendance_score": state["attendance_score"],
-                "problem_solving": state["tl_problem_solving"],
-                "kpi": state["tl_kpi"],
-                "general": state["tl_general"],
-            }
-        )
+        result.update({
+            "final_score": state["final_score"],
+            "segment_a_marks": state["segment_a_marks"],
+            "segment_b_marks": state["segment_b_marks"],
+            "base_total": state["base_total"],
+            "reward_score": 0.0,
+            "component1_score": state["quality_check"],
+            "code_quality_ai": state["code_quality_ai"],
+            "resolution_rate": round(state["resolution_rate"], 4),
+            "reopen_quality_score": round(state["reopen_quality"], 4),
+            "lines_added_score": state["lines_added_score"],
+            "lines_deleted_score": state["lines_deleted_score"],
+            "component2_score": component2,
+            "work_log_hours": state["total_hours"],
+            "work_log_score": state["work_log_score"],
+            "sentiment_score": state["sentiment_avg"],
+            "attendance_score": state["attendance_score"],
+            "problem_solving": state["tl_problem_solving"],
+            "kpi": state["tl_kpi"],
+            "general": state["tl_general"],
+        })
 
-        log.info("developer_team_run_done", final_score=state["final_score"])
+        log.info("sqa_team_run_done", final_score=state["final_score"])
         return result
-
-    # ── Team-level Excel report ───────────────────────────────────────────────
 
     async def generate_report(
         self,
@@ -352,13 +293,11 @@ class DeveloperTeam(TeamContract):
         db: AsyncSession,
         **kwargs: Any,
     ) -> str | None:
-        """Generate the developer Excel report and move to outputs/reports/."""
-        result = await generate_developer_reports(
+        result = await generate_sqa_reports(
             run_id=run_id,
             emails=emails,
             year=year,
             month=month,
             db=db,
         )
-        # The supervisor expects the primary (code-quality) report path.
         return result.get("code_quality_report") or result.get("final_report")

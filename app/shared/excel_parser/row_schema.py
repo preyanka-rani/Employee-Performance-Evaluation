@@ -20,12 +20,22 @@ Field reference
 employee_id    : str  – internal HR ID; may be empty (resolved later by MySQL)
 employee_email : str  – work email (lowercased, required, must contain '@')
 employee_name  : str  – full name (required)
-problem_solving: float 0–10  (developer TL score, "Critical Thinking & PS")
+problem_solving: float 0–10  (developer / SQA TL score, "Critical Thinking & PS")
 support_readiness: float 0–10  (support team TL score, alias of PS)
 kpi           : float 0–15
 general       : float 0–15
 gitlab_username: str | None
 team_name     : str – raw team label from the Excel (if a team column exists)
+
+Team-to-schema routing
+──────────────────────
+TEAM_SCHEMAS maps every registered team key to the exact set of canonical
+fields the parser must resolve for that team.  This is used by the parser
+to:
+  - validate that the correct score column is present
+    (``problem_solving`` for developer/SQA vs ``support_readiness`` for support)
+  - provide team-specific error messages
+  - document the Excel contract expected by each team
 """
 
 from __future__ import annotations
@@ -37,6 +47,28 @@ from dataclasses import dataclass, field
 REQUIRED_FIELDS: frozenset[str] = frozenset(
     {"employee_email", "problem_solving_or_readiness", "kpi", "general"}
 )
+
+# ── Team-specific field requirements ───────────────────────────────────────────
+# Each frozenset lists the canonical fields the parser MUST find for that team.
+# Use ``problem_solving`` for teams whose TL header says "Critical Thinking & PS".
+# Use ``support_readiness`` for teams whose TL header says "Support Readiness".
+TEAM_SCHEMAS: dict[str, frozenset[str]] = {
+    # Developer / SQA — same Excel contract (problem_solving field)
+    "developer": frozenset({"employee_email", "problem_solving", "kpi", "general"}),
+    "sqa": frozenset({"employee_email", "problem_solving", "kpi", "general"}),
+    # Support sub-teams — use support_readiness instead of problem_solving
+    "impl_its": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    "onsite_support": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    "production": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    "tech_support": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    "support": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    # CIRT & Infra — same support-style contract
+    "cirt_infra": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    # GSD — same support-style contract (support_readiness column)
+    "gsd": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+    # Hajj Helpdesk — same support-style contract (support_readiness column)
+    "hajj_helpdesk": frozenset({"employee_email", "support_readiness", "kpi", "general"}),
+}
 
 
 @dataclass
