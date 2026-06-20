@@ -42,17 +42,17 @@ def normalise_gsd_log_hours(hours: float) -> float:
         ==   0 →   0
         else   →  20   (0 < hours < 50)
     """
-    if hours >= 120:
+    if hours >= 160:
         return 100.0
-    elif hours >= 110:
+    elif hours >= 140:
         return 80.0
-    elif hours >= 100:
+    elif hours >= 130:
         return 70.0
-    elif hours >= 90:
+    elif hours >= 120:
         return 60.0
-    elif hours >= 80:
+    elif hours >= 110:
         return 50.0
-    elif hours >= 50:
+    elif hours >= 80:
         return 40.0
     elif hours == 0:
         return 0.0
